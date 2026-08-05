@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useLocale } from "@/lib/i18n";
 import { PortalNav } from "@/components/PortalNav";
 import { Button } from "@/components/ui/button";
-import { LayoutDashboard, ScanLine, ShieldCheck, Smartphone, Stamp, Gift, Coins } from "lucide-react";
+import { LayoutDashboard, ScanLine, ShieldCheck, Stamp, Gift, Coins } from "lucide-react";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -38,19 +38,13 @@ function Index() {
       to: "/dashboard",
       icon: LayoutDashboard,
       title: t("merchantPortal"),
-      desc: ar ? "مصمم البطاقة والحملات والتحليلات" : "Pass designer, campaigns, analytics",
+      desc: ar ? "لوحة تحكم المنشأة، مصمم البطاقة والحملات" : "Pass designer, campaigns, overview, analytics",
     },
     {
       to: "/scan",
       icon: ScanLine,
       title: t("cashierPortal"),
-      desc: ar ? "ماسح QR محمي برمز سري" : "PIN-locked QR scanner terminal",
-    },
-    {
-      to: "/join/$slug",
-      icon: Smartphone,
-      title: t("claimPage"),
-      desc: ar ? "صفحة تسجيل العميل الفورية" : "Instant customer sign-up page",
+      desc: ar ? "شاشة الكاشير لمسح وإضافة الأختام برمز المطعم" : "PIN-locked POS scanner for your restaurant",
     },
   ];
 
@@ -102,12 +96,11 @@ function Index() {
 
         <section className="mx-auto max-w-7xl px-4 py-14">
           <h2 className="text-2xl font-bold">{ar ? "البوابات" : "Portals"}</h2>
-          <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="mt-6 grid gap-4 sm:grid-cols-3">
             {portals.map((p) => (
               <Link
                 key={p.to}
                 to={p.to}
-                params={{ slug: "demo-cafe" }}
                 className="panel group p-5 transition-transform hover:-translate-y-1"
               >
                 <p.icon className="size-6 text-primary" />

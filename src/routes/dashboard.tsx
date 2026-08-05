@@ -18,7 +18,19 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, LogOut, ShieldAlert } from "lucide-react";
+import {
+  AlertTriangle,
+  Copy,
+  Download,
+  Edit3,
+  ExternalLink,
+  LayoutDashboard,
+  Loader2,
+  LogOut,
+  QrCode,
+  ShieldAlert,
+  Trash2,
+} from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -110,6 +122,12 @@ function MerchantDashboard() {
   const [pushEn, setPushEn] = useState("");
   const [reminders, setReminders] = useState({ d14: true, d30: true, d60: false });
   const [sending, setSending] = useState(false);
+  const [activeTab, setActiveTab] = useState("overview");
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deletingCampaign, setDeletingCampaign] = useState(false);
+  const [showResetPassword, setShowResetPassword] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [updatingPassword, setUpdatingPassword] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -118,9 +136,15 @@ function MerchantDashboard() {
       setUser(data.session?.user ?? null);
       setAuthReady(true);
     });
-    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+    if (typeof window !== "undefined" && (window.location.hash.includes("type=recovery") || window.location.hash.includes("type=invite"))) {
+      setShowResetPassword(true);
+    }
+    const { data } = supabase.auth.onAuthStateChange((event, session) => {
       setUser(session?.user ?? null);
       setAuthReady(true);
+      if (event === "PASSWORD_RECOVERY") {
+        setShowResetPassword(true);
+      }
     });
     return () => {
       active = false;
@@ -155,7 +179,30 @@ function MerchantDashboard() {
         .not("business_id", "is", null);
       if (membershipError) throw membershipError;
 
-      const ids = [...new Set((memberships ?? []).map((row) => row.business_id as string))];
+      let ids = [...new Set((memberships ?? []).map((row) => row.business_id as string))];
+
+      if (ids.length === 0 && user?.email) {
+        // Auto-link pre-registered business by matching merchant_email
+        const { data: preRegistered } = await supabase
+          .from("businesses")
+          .select("id, owner_id")
+          .ilike("merchant_email", user.email);
+
+        if (preRegistered && preRegistered.length > 0) {
+          for (const biz of preRegistered) {
+            if (!biz.owner_id) {
+              await supabase.from("businesses").update({ owner_id: user.id }).eq("id", biz.id);
+            }
+            await supabase.from("user_roles").insert({
+              user_id: user.id,
+              role: "merchant",
+              business_id: biz.id,
+            });
+          }
+          ids = preRegistered.map((b) => b.id);
+        }
+      }
+
       if (ids.length === 0) return [] as Business[];
 
       const { data, error } = await supabase
@@ -321,6 +368,44 @@ function MerchantDashboard() {
     toast.success(successMessage);
   }
 
+  const joinUrl = useMemo(() => {
+    if (!business) return "";
+    if (typeof window !== "undefined") {
+      return `${window.location.origin}/join/${business.slug}`;
+    }
+    return `http://localhost:8080/join/${business.slug}`;
+  }, [business]);
+
+  const qrImageUrl = useMemo(() => {
+    if (!joinUrl) return "";
+    return `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(joinUrl)}`;
+  }, [joinUrl]);
+
+  async function downloadQR() {
+    if (!qrImageUrl || !business) return;
+    try {
+      const response = await fetch(qrImageUrl);
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = `${business.slug}-join-qr.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+      toast.success(ar ? "تم تحميل رمز QR بنجاح!" : "QR code downloaded successfully!");
+    } catch {
+      toast.error(ar ? "تعذر تحميل رمز QR" : "Failed to download QR code");
+    }
+  }
+
+  function copyJoinUrl() {
+    if (!joinUrl) return;
+    navigator.clipboard.writeText(joinUrl);
+    toast.success(ar ? "تم نسخ رابط الانضمام إلى الحافظة!" : "Join link copied to clipboard!");
+  }
+
   async function saveDesign() {
     if (!business) return;
     let logoUrl = business.logo_url;
@@ -349,8 +434,9 @@ function MerchantDashboard() {
         target_stamps: design.targetStamps,
         sar_per_point: design.sarPerPoint,
       },
-      ar ? "تم حفظ تصميم البطاقة" : "Pass design saved",
+      ar ? "تم حفظ تصميم البطاقة والانتقال إلى لوحة التحكم الرئيسية" : "Pass design saved! Switched to main overview.",
     );
+    setActiveTab("overview");
   }
 
   async function saveReminder(key: "d14" | "d30" | "d60", enabled: boolean) {
@@ -458,6 +544,76 @@ function MerchantDashboard() {
 
   return (
     <div className="min-h-screen">
+      {showResetPassword && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-background/80 backdrop-blur-xs px-4">
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              setUpdatingPassword(true);
+              const { error } = await supabase.auth.updateUser({ password: newPassword });
+              setUpdatingPassword(false);
+              if (error) {
+                toast.error(error.message);
+              } else {
+                toast.success(
+                  ar ? "تم تحديث كلمة المرور بنجاح!" : "Password updated successfully!",
+                );
+                setShowResetPassword(false);
+                setNewPassword("");
+                if (typeof window !== "undefined") {
+                  window.history.replaceState(null, "", window.location.pathname);
+                }
+              }
+            }}
+            className="panel w-full max-w-sm space-y-4 p-6 shadow-xl"
+          >
+            <div>
+              <h2 className="text-lg font-bold">
+                {ar ? "تعيين كلمة مرور جديدة" : "Set New Password"}
+              </h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {ar
+                  ? "أدخل كلمة المرور الجديدة لحساب التاجر الخاص بك."
+                  : "Enter a new password for your merchant account."}
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="reset-new-password">
+                {ar ? "كلمة المرور الجديدة" : "New Password"}
+              </Label>
+              <Input
+                id="reset-new-password"
+                type="password"
+                required
+                minLength={6}
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                dir="ltr"
+                placeholder="••••••••"
+              />
+            </div>
+            <div className="flex gap-2">
+              <Button className="w-full" type="submit" disabled={updatingPassword}>
+                {updatingPassword ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : ar ? (
+                  "حفظ كلمة المرور"
+                ) : (
+                  "Save Password"
+                )}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setShowResetPassword(false)}
+              >
+                {ar ? "إلغاء" : "Cancel"}
+              </Button>
+            </div>
+          </form>
+        </div>
+      )}
+
       <PortalNav
         title={t("merchantPortal")}
         subtitle={ar ? design.businessName : design.businessNameEn}
@@ -490,14 +646,132 @@ function MerchantDashboard() {
             </Button>
           </div>
         </div>
-        <Tabs defaultValue="designer">
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="flex flex-wrap">
-            <TabsTrigger value="designer">{t("passDesigner")}</TabsTrigger>
+            <TabsTrigger value="overview">
+              <LayoutDashboard className="me-1.5 size-4" />
+              {ar ? "الرئيسية (مركز التحكم)" : "Main Overview"}
+            </TabsTrigger>
+            <TabsTrigger value="designer">
+              <Edit3 className="me-1.5 size-4" />
+              {t("passDesigner")}
+            </TabsTrigger>
             <TabsTrigger value="pin">{t("pinManager")}</TabsTrigger>
             <TabsTrigger value="geo">{t("geofence")}</TabsTrigger>
             <TabsTrigger value="push">{t("campaigns")}</TabsTrigger>
             <TabsTrigger value="analytics">{t("analytics")}</TabsTrigger>
           </TabsList>
+
+          {/* Main Overview Tab */}
+          <TabsContent value="overview" className="mt-6 space-y-6">
+            {/* Header Summary & Quick Actions */}
+            <div className="panel grid gap-6 p-6 lg:grid-cols-3 items-center">
+              <div className="space-y-2 lg:col-span-2">
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className="capitalize">
+                    {ar ? PASS_TEMPLATES[program].name.ar : PASS_TEMPLATES[program].name.en}
+                  </Badge>
+                  <Badge variant="default">
+                    {ar ? "الحملة نشطة" : "Campaign Active"}
+                  </Badge>
+                </div>
+                <h2 className="text-2xl font-bold">
+                  {ar ? design.businessName || "اسم المنشأة" : design.businessNameEn || "Business Name"}
+                </h2>
+                <p className="text-sm text-muted-foreground">
+                  {ar
+                    ? design.headline || "عروض الولاء للمشتركين"
+                    : design.headlineEn || "Loyalty offer for customers"}
+                </p>
+              </div>
+
+              {/* Quick Action Buttons */}
+              <div className="flex flex-wrap gap-3 lg:justify-end">
+                <Button variant="default" onClick={() => setActiveTab("designer")}>
+                  <Edit3 className="me-2 size-4" />
+                  {ar ? "تعديل تصميم البطاقة" : "Edit Pass Design"}
+                </Button>
+                <Button variant="destructive" onClick={() => setShowDeleteModal(true)}>
+                  <Trash2 className="me-2 size-4" />
+                  {ar ? "حذف / إعادة ضبط الحملة" : "Delete / Reset Campaign"}
+                </Button>
+              </div>
+            </div>
+
+            {/* Sharing & QR Code Section */}
+            <div className="grid gap-6 md:grid-cols-2">
+              {/* Public Join Link Card */}
+              <div className="panel flex flex-col justify-between p-6">
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2 text-primary font-semibold">
+                    <ExternalLink className="size-5" />
+                    <h3>{ar ? "رابط انضمام العملاء" : "Public Join Link"}</h3>
+                  </div>
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    {ar
+                      ? "شارك هذا الرابط مع عملائك ليتمكنوا من الانضمام لبرنامج الولاء وحفظ بطاقتك مباشرة في محفظة Apple أو Google."
+                      : "Share this link with your customers to let them join your loyalty program and save your pass directly into Apple or Google Wallet."}
+                  </p>
+                  <div className="flex items-center gap-2 rounded-md border border-input bg-muted/50 p-2 text-xs font-mono">
+                    <span className="truncate flex-1 dir-ltr">{joinUrl}</span>
+                    <Button size="sm" variant="secondary" onClick={copyJoinUrl}>
+                      <Copy className="size-3.5 me-1" />
+                      {ar ? "نسخ" : "Copy"}
+                    </Button>
+                  </div>
+                </div>
+                <div className="mt-4 pt-4 border-t">
+                  <a
+                    href={joinUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs font-medium text-primary hover:underline flex items-center gap-1"
+                  >
+                    {ar ? "معاينة صفحة الانضمام للعملاء" : "Preview customer join page"}{" "}
+                    <ExternalLink className="size-3" />
+                  </a>
+                </div>
+              </div>
+
+              {/* Downloadable QR Code Card */}
+              <div className="panel flex flex-col items-center p-6 text-center space-y-4">
+                <div className="flex items-center gap-2 text-primary font-semibold">
+                  <QrCode className="size-5" />
+                  <h3>{ar ? "رمز QR المباشر للانضمام" : "Printable Join QR Code"}</h3>
+                </div>
+                <div className="relative rounded-xl border bg-white p-3 shadow-xs">
+                  <img
+                    src={qrImageUrl}
+                    alt="Public Join QR Code"
+                    className="size-44 object-contain"
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground max-w-xs">
+                  {ar
+                    ? "اطبع رمز QR واعرضه على الطاولات أو الكاونتر ليقوم العملاء بمسحه فوراً."
+                    : "Print this QR code on table tents or at the counter for instant customer sign-ups."}
+                </p>
+                <Button variant="outline" size="sm" onClick={downloadQR}>
+                  <Download className="me-2 size-4" />
+                  {ar ? "تحميل رمز QR (صورة PNG)" : "Download QR Code (PNG)"}
+                </Button>
+              </div>
+            </div>
+
+            {/* Current Pass Live Preview */}
+            <div className="panel p-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="font-bold text-lg">{ar ? "معاينة البطاقة الحالية" : "Current Pass Preview"}</h3>
+                <Button size="sm" variant="outline" onClick={() => setActiveTab("designer")}>
+                  <Edit3 className="me-1.5 size-3.5" />
+                  {ar ? "تعديل" : "Edit"}
+                </Button>
+              </div>
+              <div className="grid place-items-center py-4">
+                <PassPreview design={design} locale={locale} />
+              </div>
+            </div>
+          </TabsContent>
 
           {/* Pass designer */}
           <TabsContent
@@ -859,6 +1133,62 @@ function MerchantDashboard() {
             </div>
           </TabsContent>
         </Tabs>
+
+        {/* Campaign Delete/Reset Confirmation Modal */}
+        {showDeleteModal && (
+          <div className="fixed inset-0 z-50 grid place-items-center bg-background/80 backdrop-blur-xs px-4">
+            <div className="panel w-full max-w-md space-y-5 p-6 shadow-xl border-destructive/40">
+              <div className="flex items-start gap-4">
+                <div className="rounded-full bg-destructive/10 p-3 text-destructive">
+                  <AlertTriangle className="size-6" />
+                </div>
+                <div className="space-y-1">
+                  <h2 className="text-lg font-bold">
+                    {ar ? "هل أنت تأكد من إعادة ضبط الحملة؟" : "Are you sure you want to reset this campaign?"}
+                  </h2>
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    {ar
+                      ? "سيؤدي هذا الإجراء إلى مسح تصميم البطاقة والعرض المخصص لهذه المنشأة. يمكنك إنشاء تصميم جديد في أي وقت."
+                      : "This action will clear the current pass design and reward offer settings for this business. You can create a new design anytime."}
+                  </p>
+                </div>
+              </div>
+              <div className="flex justify-end gap-3 pt-2">
+                <Button variant="outline" onClick={() => setShowDeleteModal(false)}>
+                  {ar ? "إلغاء" : "Cancel"}
+                </Button>
+                <Button
+                  variant="destructive"
+                  disabled={deletingCampaign}
+                  onClick={async () => {
+                    setDeletingCampaign(true);
+                    await updateBusiness(
+                      {
+                        offer_ar: "",
+                        offer_en: "",
+                        brand_color: "#059669",
+                        accent_color: "#F59E0B",
+                        logo_url: null,
+                      },
+                      ar ? "تمت إعادة ضبط الحملة بنجاح" : "Campaign reset successfully",
+                    );
+                    setDeletingCampaign(false);
+                    setShowDeleteModal(false);
+                    setActiveTab("designer");
+                  }}
+                >
+                  {deletingCampaign ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : ar ? (
+                    "تأكيد إعادة الضبط"
+                  ) : (
+                    "Confirm Reset"
+                  )}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
     </div>
   );

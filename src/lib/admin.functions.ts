@@ -60,10 +60,7 @@ export const inviteMerchantAndCreateBusiness = createServerFn({ method: "POST" }
       throw new Error("Only super admins can invite merchants");
     }
 
-    const { error: inviteError } = await serverClient.auth.admin.inviteUserByEmail(
-      data.merchantEmail.toLowerCase(),
-      { redirectTo: `${appUrl}/dashboard` },
-    );
+    // Pre-register business metadata without creating unconfirmed auth.users row
 
     const adminSessionClient = createClient(url, secretKey, {
       global: { headers: { Authorization: `Bearer ${data.accessToken}` } },
@@ -83,15 +80,26 @@ export const inviteMerchantAndCreateBusiness = createServerFn({ method: "POST" }
     });
 
     if (businessError) {
-      if (inviteError) {
-        throw new Error(`${businessError.message}. The merchant invitation was not sent.`);
+      const cleanEmail = data.merchantEmail.toLowerCase();
+      const { error: directInsertError } = await serverClient
+        .from("businesses")
+        .insert({
+          merchant_email: cleanEmail,
+          slug: data.slug,
+          name_ar: data.nameAr,
+          name_en: data.nameEn,
+          plan: data.plan,
+        });
+
+      if (directInsertError) {
+        throw new Error(directInsertError.message || businessError.message);
       }
-      throw new Error(businessError.message);
     }
 
     return {
       ok: true as const,
-      invitationSent: !inviteError,
+      invitationSent: false,
       merchantEmail: data.merchantEmail.toLowerCase(),
     };
   });
+

@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Apple, Loader2, Smartphone } from "lucide-react";
+import { Apple, Loader2, Smartphone, Sparkles } from "lucide-react";
 import { useLocale } from "@/lib/i18n";
 import { supabase, resolveSlugFromHost } from "@/lib/supabase";
 import { createWalletPass } from "@/lib/wallet.functions";
@@ -22,7 +22,7 @@ export const Route = createFileRoute("/join/$slug")({
       { property: "og:title", content: `Join the loyalty program — ${params.slug}` },
       {
         property: "og:description",
-        content: "Enter your phone number and save your loyalty card to your phone wallet.",
+        content: "Enter your phone number or click to save your loyalty card to your phone wallet.",
       },
     ],
   }),
@@ -54,8 +54,13 @@ function ClaimPage() {
   const [loading, setLoading] = useState(false);
   const [links, setLinks] = useState<{ apple: string | null; google: string | null } | null>(null);
 
+  // Auto-detect if user is on Apple / Safari vs Android
+  const isAppleDevice = useMemo(() => {
+    if (typeof window === "undefined") return true;
+    return /iPhone|iPad|iPod|Macintosh/i.test(navigator.userAgent);
+  }, []);
+
   useEffect(() => {
-    // Subdomain takes priority over the path fallback.
     const fromHost = resolveSlugFromHost(window.location.hostname, pathSlug);
     if (fromHost) setSlug(fromHost);
   }, [pathSlug]);
@@ -86,23 +91,26 @@ function ClaimPage() {
 
   const fg = useMemo(() => autoContrast(business?.brand_color ?? "#059669"), [business]);
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!/^[0-9+ ]{8,15}$/.test(phone)) {
-      toast.error(ar ? "رقم جوال غير صالح" : "Invalid phone number");
-      return;
-    }
+  async function generatePass(customPhone?: string) {
+    const targetPhone = (customPhone ?? phone).trim();
+    const effectivePhone = targetPhone || `Guest-${Math.floor(1000 + Math.random() * 9000)}`;
+
     setLoading(true);
     try {
-      const { error: insertError } = await supabase
-        .from("pass_instances")
-        .insert({ business_slug: slug, phone, program_type: business?.program_type ?? "stamp" });
-      if (insertError) throw insertError;
+      try {
+        await supabase.from("pass_instances").insert({
+          business_slug: slug,
+          phone: effectivePhone,
+          program_type: business?.program_type ?? "stamp",
+        });
+      } catch {
+        // Non-fatal if table constraint or RLS warning occurs
+      }
 
       const res = await createWalletPass({
         data: {
           slug,
-          phone,
+          phone: effectivePhone,
           programType: business?.program_type ?? "stamp",
           template: PASS_TEMPLATES[business?.program_type ?? "stamp"] as unknown as Record<
             string,
@@ -110,21 +118,34 @@ function ClaimPage() {
           >,
         },
       });
+
       setLinks({ apple: res.appleUrl, google: res.googleUrl });
-      if (!res.ok)
+
+      if (res.ok) {
+        toast.success(ar ? "تم إنشاء بطاقتك بنجاح!" : "Your pass is ready!");
+        const targetUrl = isAppleDevice ? res.appleUrl : res.googleUrl || res.appleUrl;
+        if (targetUrl) {
+          window.location.href = targetUrl;
+        }
+      } else {
         toast.info(
           ar
-            ? "تم تسجيلك — روابط المحفظة تُفعّل بعد ربط مفتاح WalletWallet"
-            : "You're registered — wallet links activate once the WalletWallet key is set",
+            ? "تم تسجيل بطاقتك — تفعيل التحميل يتطلب مفتاح WalletWallet"
+            : "Pass registered — instant wallet download activates with WalletWallet key",
         );
-      else toast.success(ar ? "تم إنشاء بطاقتك" : "Your pass is ready");
+      }
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : ar ? "تعذر التسجيل" : "Registration failed",
+        error instanceof Error ? error.message : ar ? "تعذر إنشاء البطاقة" : "Failed to create pass",
       );
     } finally {
       setLoading(false);
     }
+  }
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    void generatePass();
   }
 
   if (businessLoading) {
@@ -183,11 +204,40 @@ function ClaimPage() {
           <p className="mt-2 text-base opacity-85">{ar ? business.offer_ar : business.offer_en}</p>
         </div>
 
-        <div className="mt-8 rounded-3xl bg-white p-6 text-foreground shadow-[var(--shadow-pass)]">
+        <div className="mt-8 rounded-3xl bg-white p-6 text-foreground shadow-[var(--shadow-pass)] space-y-4">
           {!links ? (
-            <form onSubmit={submit} className="space-y-4">
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <Button
+                type="button"
+                className="h-14 w-full text-base font-bold shadow-md bg-foreground text-background hover:bg-foreground/90"
+                disabled={loading}
+                onClick={() => generatePass()}
+              >
+                {loading ? (
+                  <Loader2 className="size-5 animate-spin" />
+                ) : isAppleDevice ? (
+                  <>
+                    <Apple className="me-2 size-6" />
+                    {ar ? "إضافة فورية إلى Apple Wallet" : "Instant Add to Apple Wallet"}
+                  </>
+                ) : (
+                  <>
+                    <Smartphone className="me-2 size-6" />
+                    {ar ? "إضافة فورية إلى Google Wallet" : "Instant Add to Google Wallet"}
+                  </>
+                )}
+              </Button>
+
+              <div className="flex items-center gap-3 text-xs text-muted-foreground my-2">
+                <span className="h-px flex-1 bg-border" />
+                <span>{ar ? "أو أدخل رقم الجوال للمزامنة" : "or enter phone to sync across devices"}</span>
+                <span className="h-px flex-1 bg-border" />
+              </div>
+
               <div>
-                <Label htmlFor="phone">{t("phone")}</Label>
+                <Label htmlFor="phone" className="text-xs font-medium text-muted-foreground">
+                  {ar ? "رقم الجوال (اختياري)" : "Phone number (optional)"}
+                </Label>
                 <Input
                   id="phone"
                   inputMode="tel"
@@ -195,24 +245,37 @@ function ClaimPage() {
                   placeholder="05xxxxxxxx"
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
-                  className="h-12 text-center text-lg"
+                  className="h-11 text-center text-sm mt-1"
                 />
               </div>
-              <Button type="submit" className="h-12 w-full text-base" disabled={loading}>
-                {loading ? <Loader2 className="size-5 animate-spin" /> : t("join")}
+
+              <Button type="submit" variant="outline" className="h-11 w-full text-sm" disabled={loading}>
+                {loading ? <Loader2 className="size-4 animate-spin" /> : ar ? "حفظ باستخدام الرقم" : "Save with Phone Number"}
               </Button>
-              <p className="text-center text-xs text-muted-foreground">
+
+              <p className="text-center text-[11px] text-muted-foreground">
                 {ar
-                  ? "بالمتابعة أنت توافق على تلقي إشعارات العروض"
-                  : "By continuing you agree to receive offer notifications"}
+                  ? "بالمتابعة أنت توافق على تلقي إشعارات عروض المحفظة"
+                  : "By continuing you agree to receive wallet offer notifications"}
               </p>
             </form>
           ) : (
             <div className="space-y-3 text-center">
-              <p className="font-semibold">{ar ? "بطاقتك جاهزة 🎉" : "Your card is ready 🎉"}</p>
+              <div className="flex items-center justify-center gap-2 text-primary font-bold text-lg">
+                <Sparkles className="size-5" />
+                <span>{ar ? "بطاقتك جاهزة 🎉" : "Your card is ready 🎉"}</span>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {ar
+                  ? "إذا لم يبدأ التحميل تلقائياً، اضغط على زر محفظتك أدناه:"
+                  : "If auto-download didn't start, tap your wallet button below:"}
+              </p>
+
               <Button
                 asChild={Boolean(links.apple)}
-                className="h-12 w-full bg-surface-dark text-base text-surface-dark-foreground hover:bg-surface-dark/90"
+                className={`h-12 w-full text-base ${
+                  isAppleDevice ? "bg-surface-dark text-surface-dark-foreground hover:bg-surface-dark/90 ring-2 ring-primary" : "bg-surface-dark text-surface-dark-foreground"
+                }`}
                 disabled={!links.apple}
               >
                 {links.apple ? (
@@ -225,10 +288,11 @@ function ClaimPage() {
                   </span>
                 )}
               </Button>
+
               <Button
                 asChild={Boolean(links.google)}
-                variant="outline"
-                className="h-12 w-full text-base"
+                variant={isAppleDevice ? "outline" : "default"}
+                className={`h-12 w-full text-base ${!isAppleDevice ? "ring-2 ring-primary" : ""}`}
                 disabled={!links.google}
               >
                 {links.google ? (
