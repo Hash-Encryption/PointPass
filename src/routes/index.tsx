@@ -107,7 +107,7 @@ function Index() {
               <Link
                 key={p.to}
                 to={p.to}
-                params={p.to === "/join/$slug" ? { slug: "demo-cafe" } : undefined}
+                params={{ slug: "demo-cafe" }}
                 className="panel group p-5 transition-transform hover:-translate-y-1"
               >
                 <p.icon className="size-6 text-primary" />
