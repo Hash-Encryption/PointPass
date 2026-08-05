@@ -48,6 +48,8 @@ function ClaimPage() {
 
   const [slug, setSlug] = useState(pathSlug);
   const [business, setBusiness] = useState<Business | null>(null);
+  const [businessLoading, setBusinessLoading] = useState(true);
+  const [businessError, setBusinessError] = useState<string | null>(null);
   const [phone, setPhone] = useState("");
   const [loading, setLoading] = useState(false);
   const [links, setLinks] = useState<{ apple: string | null; google: string | null } | null>(null);
@@ -61,30 +63,26 @@ function ClaimPage() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const { data } = await supabase
+      setBusinessLoading(true);
+      setBusinessError(null);
+      const { data, error } = await supabase
         .from("businesses")
-        .select("*")
+        .select(
+          "slug,name_ar,name_en,logo_url,brand_color,accent_color,program_type,offer_ar,offer_en",
+        )
         .eq("slug", slug)
         .maybeSingle();
       if (cancelled) return;
-      setBusiness(
-        (data as Business | null) ?? {
-          slug,
-          name_ar: "مقهى النخبة",
-          name_en: "Elite Coffee",
-          logo_url: null,
-          brand_color: "#059669",
-          accent_color: "#F59E0B",
-          program_type: "stamp",
-          offer_ar: "اشترِ ٩ واحصل على واحدة مجاناً",
-          offer_en: "Buy 9, get 1 free",
-        },
+      setBusiness((data as Business | null) ?? null);
+      setBusinessError(
+        error?.message ?? (data ? null : ar ? "المنشأة غير موجودة." : "Business not found."),
       );
+      setBusinessLoading(false);
     })();
     return () => {
       cancelled = true;
     };
-  }, [slug]);
+  }, [ar, slug]);
 
   const fg = useMemo(() => autoContrast(business?.brand_color ?? "#059669"), [business]);
 
@@ -96,10 +94,10 @@ function ClaimPage() {
     }
     setLoading(true);
     try {
-      await supabase
+      const { error: insertError } = await supabase
         .from("pass_instances")
-        .insert({ business_slug: slug, phone, program_type: business?.program_type ?? "stamp" })
-        .then(() => undefined, () => undefined);
+        .insert({ business_slug: slug, phone, program_type: business?.program_type ?? "stamp" });
+      if (insertError) throw insertError;
 
       const res = await createWalletPass({
         data: {
@@ -120,15 +118,32 @@ function ClaimPage() {
             : "You're registered — wallet links activate once the WalletWallet key is set",
         );
       else toast.success(ar ? "تم إنشاء بطاقتك" : "Your pass is ready");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : ar ? "تعذر التسجيل" : "Registration failed",
+      );
     } finally {
       setLoading(false);
     }
   }
 
-  if (!business) {
+  if (businessLoading) {
     return (
       <div className="grid min-h-screen place-items-center bg-background">
         <Loader2 className="size-6 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (businessError || !business) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-background px-4">
+        <div className="panel max-w-md p-6 text-center">
+          <h1 className="text-xl font-bold">
+            {ar ? "تعذر تحميل برنامج الولاء" : "Loyalty program unavailable"}
+          </h1>
+          <p className="mt-2 text-sm text-muted-foreground">{businessError}</p>
+        </div>
       </div>
     );
   }
@@ -138,7 +153,10 @@ function ClaimPage() {
       <div className="mx-auto flex min-h-screen max-w-md flex-col px-5 py-8" style={{ color: fg }}>
         <div className="flex items-center justify-between">
           <span className="text-xs opacity-70">{slug}.yourplatform.com</span>
-          <button className="rounded-full bg-black/10 px-3 py-1 text-xs font-semibold" onClick={toggle}>
+          <button
+            className="rounded-full bg-black/10 px-3 py-1 text-xs font-semibold"
+            onClick={toggle}
+          >
             {t("language")}
           </button>
         </div>
@@ -159,7 +177,9 @@ function ClaimPage() {
               {(ar ? business.name_ar : business.name_en).slice(0, 2)}
             </span>
           )}
-          <h1 className="mt-4 text-2xl font-extrabold">{ar ? business.name_ar : business.name_en}</h1>
+          <h1 className="mt-4 text-2xl font-extrabold">
+            {ar ? business.name_ar : business.name_en}
+          </h1>
           <p className="mt-2 text-base opacity-85">{ar ? business.offer_ar : business.offer_en}</p>
         </div>
 

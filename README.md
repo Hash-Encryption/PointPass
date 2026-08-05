@@ -4,11 +4,10 @@ Build a complete multi-tenant Mobile Wallet Loyalty SaaS application in a single
 
 ### 1. API Credentials & Supabase Configuration:
 
-- Supabase Project URL: https://cxtmckbpnjxkrsuwlvwl.supabase.co
-
-- Supabase Anon Key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN4dG1ja2Jwbmp4a3JzdXdsdndsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU4ODkyMjgsImV4cCI6MjEwMTQ2NTIyOH0.YjQudMUVdnwSQQiKCx3K8UZjC6aIJcnK-stdyUIeZHU
-
-- Wallet Pass Engine: Create Supabase Edge Functions to proxy all pass creation and push notification requests to `https://api.walletwallet.com/v1` using the `WALLETWALLET_API_KEY` environment secret.
+- Copy `.env.example` to `.env.local` for local development.
+- Keep browser-safe Supabase values in `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`.
+- Keep `SUPABASE_SECRET_KEY` and `WALLETWALLET_API_KEY` server-only.
+- Configure the WalletWallet endpoint with `WALLETWALLET_API_URL`; wallet creation and push requests are proxied through server functions.
 
 ---
 
@@ -62,11 +61,11 @@ Build a complete multi-tenant Mobile Wallet Loyalty SaaS application in a single
 
 - **All 3 Program Types Supported:**
 
-  1. *Digital Stamp Card:* Configurable target stamps (e.g., "Buy 9 Coffees, Get 1 Free").
+  1. _Digital Stamp Card:_ Configurable target stamps (e.g., "Buy 9 Coffees, Get 1 Free").
 
-  2. *Points & Cashback:* Configurable SAR-to-point ratios (e.g., "Earn 1 Point per 10 SAR spent").
+  2. _Points & Cashback:_ Configurable SAR-to-point ratios (e.g., "Earn 1 Point per 10 SAR spent").
 
-  3. *Coupon-to-Loyalty Morph:* Starts as an introductory discount voucher (e.g., "20% Off First Visit") and automatically morphs into a permanent Loyalty Card upon its first scan.
+  3. _Coupon-to-Loyalty Morph:_ Starts as an introductory discount voucher (e.g., "20% Off First Visit") and automatically morphs into a permanent Loyalty Card upon its first scan.
 
 - **Cashier PIN Security Manager:** Form to set, view, and change the 4-digit numeric PIN used by store staff to access the scanner terminal.
 
@@ -132,3 +131,18 @@ cd <repository-name>
 npm i
 npm run dev
 ```
+
+## Supabase setup
+
+For a new project, run `supabase/schema.sql` first and then run every file in
+`supabase/migrations/` in filename order. The business-scoped portal migration
+adds merchant-to-business memberships, tenant-aware RLS, admin business creation,
+business-owned pass analytics, and the `business-assets` Storage bucket.
+
+Set `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, and `APP_URL` as server-only environment
+variables. The admin portal uses them to invite a new merchant and create the
+business assignment in one action. Never expose the Supabase secret key in a
+`VITE_*` variable or browser bundle.
+
+Add both the local and deployed `/dashboard` URLs to Supabase Authentication's
+allowed redirect URLs so invited merchants return to the correct dashboard.

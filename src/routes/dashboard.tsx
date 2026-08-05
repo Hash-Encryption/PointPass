@@ -1,9 +1,13 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { createFileRoute, Navigate } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
+import type { User } from "@supabase/supabase-js";
 import { toast } from "sonner";
 import { PortalNav } from "@/components/PortalNav";
+import { AuthSignIn } from "@/components/AuthSignIn";
 import { PassPreview, type PassDesign } from "@/components/PassPreview";
 import { useLocale } from "@/lib/i18n";
+import { supabase } from "@/lib/supabase";
 import { PASS_TEMPLATES, autoContrast, type ProgramType } from "@/constants/defaultTemplates";
 import { sendWalletPush } from "@/lib/wallet.functions";
 import { Button } from "@/components/ui/button";
@@ -14,6 +18,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { Loader2, LogOut, ShieldAlert } from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -45,60 +50,240 @@ export const Route = createFileRoute("/dashboard")({
   component: MerchantDashboard,
 });
 
-const INSTALLS = [
-  { d: "Sun", installs: 42, redemptions: 18 },
-  { d: "Mon", installs: 61, redemptions: 27 },
-  { d: "Tue", installs: 55, redemptions: 31 },
-  { d: "Wed", installs: 78, redemptions: 44 },
-  { d: "Thu", installs: 96, redemptions: 58 },
-  { d: "Fri", installs: 134, redemptions: 87 },
-  { d: "Sat", installs: 112, redemptions: 66 },
-];
+type Business = {
+  id: string;
+  slug: string;
+  name_ar: string;
+  name_en: string;
+  logo_url: string | null;
+  brand_color: string;
+  accent_color: string;
+  program_type: ProgramType;
+  offer_ar: string | null;
+  offer_en: string | null;
+  target_stamps: number | null;
+  sar_per_point: number | null;
+  cashier_pin: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  geo_text_ar: string | null;
+  geo_text_en: string | null;
+};
 
-const PEAK = [
-  { h: "10", v: 12 },
-  { h: "12", v: 28 },
-  { h: "14", v: 41 },
-  { h: "16", v: 33 },
-  { h: "18", v: 62 },
-  { h: "20", v: 88 },
-  { h: "22", v: 51 },
-];
+type PassRow = { id: string; created_at: string; last_visit_at: string | null };
+type TransactionRow = { action: string; created_at: string };
 
 function MerchantDashboard() {
   const { locale, t } = useLocale();
   const ar = locale === "ar";
+  const [authReady, setAuthReady] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [businessId, setBusinessId] = useState("");
+  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const [program, setProgram] = useState<ProgramType>("stamp");
   const tpl = PASS_TEMPLATES[program];
 
   const [design, setDesign] = useState<PassDesign>({
-    businessName: "مقهى النخبة",
-    businessNameEn: "Elite Coffee",
+    businessName: "",
+    businessNameEn: "",
     logoUrl: null,
     background: "#059669",
     accent: "#F59E0B",
-    headline: "اشترِ ٩ واحصل على واحدة مجاناً",
-    headlineEn: "Buy 9, get 1 free",
+    headline: "",
+    headlineEn: "",
     subline: "شكراً لولائك",
     sublineEn: "Thanks for your loyalty",
     program: "stamp",
     targetStamps: 9,
     sarPerPoint: 10,
-    progress: 4,
+    progress: 0,
   });
 
-  const [pin, setPin] = useState("1234");
-  const [lat, setLat] = useState("24.7136");
-  const [lng, setLng] = useState("46.6753");
-  const [geoAr, setGeoAr] = useState("أنت قريب من المقهى! تفضل بزيارتنا اليوم");
-  const [geoEn, setGeoEn] = useState("You're near the café! Come visit us today");
-  const [pushAr, setPushAr] = useState("عرض اليوم: قهوة مجانية مع كل ختمين ☕");
-  const [pushEn, setPushEn] = useState("Today only: free coffee with every 2 stamps ☕");
+  const [pin, setPin] = useState("");
+  const [lat, setLat] = useState("");
+  const [lng, setLng] = useState("");
+  const [geoAr, setGeoAr] = useState("");
+  const [geoEn, setGeoEn] = useState("");
+  const [pushAr, setPushAr] = useState("");
+  const [pushEn, setPushEn] = useState("");
   const [reminders, setReminders] = useState({ d14: true, d30: true, d60: false });
   const [sending, setSending] = useState(false);
 
+  useEffect(() => {
+    let active = true;
+    void supabase.auth.getSession().then(({ data }) => {
+      if (!active) return;
+      setUser(data.session?.user ?? null);
+      setAuthReady(true);
+    });
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      setAuthReady(true);
+    });
+    return () => {
+      active = false;
+      data.subscription.unsubscribe();
+    };
+  }, []);
+
+  const adminRoleQuery = useQuery({
+    queryKey: ["dashboard-admin-role", user?.id],
+    enabled: Boolean(user),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("user_roles")
+        .select("role")
+        .eq("user_id", user!.id)
+        .eq("role", "super_admin")
+        .maybeSingle();
+      if (error) throw error;
+      return data;
+    },
+  });
+
+  const businessesQuery = useQuery({
+    queryKey: ["merchant-businesses", user?.id],
+    enabled: Boolean(user),
+    queryFn: async () => {
+      const { data: memberships, error: membershipError } = await supabase
+        .from("user_roles")
+        .select("business_id")
+        .eq("user_id", user!.id)
+        .eq("role", "merchant")
+        .not("business_id", "is", null);
+      if (membershipError) throw membershipError;
+
+      const ids = [...new Set((memberships ?? []).map((row) => row.business_id as string))];
+      if (ids.length === 0) return [] as Business[];
+
+      const { data, error } = await supabase
+        .from("businesses")
+        .select(
+          "id,slug,name_ar,name_en,logo_url,brand_color,accent_color,program_type,offer_ar,offer_en,target_stamps,sar_per_point,cashier_pin,latitude,longitude,geo_text_ar,geo_text_en",
+        )
+        .in("id", ids)
+        .eq("status", "active")
+        .order("created_at", { ascending: true });
+      if (error) throw error;
+      return data as Business[];
+    },
+  });
+
+  const businesses = businessesQuery.data ?? [];
+  const business = businesses.find((item) => item.id === businessId) ?? businesses[0] ?? null;
+
+  useEffect(() => {
+    if (!business) return;
+    if (!businessId) setBusinessId(business.id);
+    setProgram(business.program_type);
+    setDesign({
+      businessName: business.name_ar,
+      businessNameEn: business.name_en,
+      logoUrl: business.logo_url,
+      background: business.brand_color,
+      accent: business.accent_color,
+      headline: business.offer_ar ?? "",
+      headlineEn: business.offer_en ?? "",
+      subline: "شكراً لولائك",
+      sublineEn: "Thanks for your loyalty",
+      program: business.program_type,
+      targetStamps: business.target_stamps ?? 9,
+      sarPerPoint: business.sar_per_point ?? 10,
+      progress: 0,
+    });
+    setPin(business.cashier_pin ?? "");
+    setLat(business.latitude === null ? "" : String(business.latitude));
+    setLng(business.longitude === null ? "" : String(business.longitude));
+    setGeoAr(business.geo_text_ar ?? "");
+    setGeoEn(business.geo_text_en ?? "");
+    setLogoFile(null);
+  }, [business, businessId]);
+
+  const analyticsQuery = useQuery({
+    queryKey: ["merchant-analytics", business?.id],
+    enabled: Boolean(business),
+    queryFn: async () => {
+      const [passesResult, transactionsResult] = await Promise.all([
+        supabase
+          .from("pass_instances")
+          .select("id,created_at,last_visit_at")
+          .eq("business_id", business!.id),
+        supabase
+          .from("pass_transactions")
+          .select("action,created_at")
+          .eq("business_id", business!.id),
+      ]);
+      if (passesResult.error) throw passesResult.error;
+      if (transactionsResult.error) throw transactionsResult.error;
+      return {
+        passes: passesResult.data as PassRow[],
+        transactions: transactionsResult.data as TransactionRow[],
+      };
+    },
+  });
+
+  const automationQuery = useQuery({
+    queryKey: ["business-automations", business?.id],
+    enabled: Boolean(business),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("business_automations")
+        .select("inactive_14_enabled,inactive_30_enabled,inactive_60_enabled")
+        .eq("business_id", business!.id)
+        .maybeSingle();
+      if (error) throw error;
+      return data;
+    },
+  });
+
+  useEffect(() => {
+    if (!automationQuery.data) return;
+    setReminders({
+      d14: automationQuery.data.inactive_14_enabled,
+      d30: automationQuery.data.inactive_30_enabled,
+      d60: automationQuery.data.inactive_60_enabled,
+    });
+  }, [automationQuery.data]);
+
   const fg = useMemo(() => autoContrast(design.background), [design.background]);
+  const analytics = useMemo(() => {
+    const passes = analyticsQuery.data?.passes ?? [];
+    const transactions = analyticsQuery.data?.transactions ?? [];
+    const days = Array.from({ length: 7 }, (_, index) => {
+      const date = new Date();
+      date.setHours(0, 0, 0, 0);
+      date.setDate(date.getDate() - (6 - index));
+      const key = date.toISOString().slice(0, 10);
+      return {
+        key,
+        d: new Intl.DateTimeFormat(locale === "ar" ? "ar-SA" : "en", { weekday: "short" }).format(
+          date,
+        ),
+        installs: passes.filter((item) => item.created_at.slice(0, 10) === key).length,
+        redemptions: transactions.filter(
+          (item) => item.action === "redeem" && item.created_at.slice(0, 10) === key,
+        ).length,
+      };
+    });
+    const hours = [0, 4, 8, 12, 16, 20].map((hour) => ({
+      h: `${String(hour).padStart(2, "0")}:00`,
+      v: transactions.filter((item) => {
+        const transactionHour = new Date(item.created_at).getHours();
+        return transactionHour >= hour && transactionHour < hour + 4;
+      }).length,
+    }));
+    return {
+      days,
+      hours,
+      installs: passes.length,
+      redemptions: transactions.filter((item) => item.action === "redeem").length,
+      retention: passes.length
+        ? Math.round((passes.filter((item) => item.last_visit_at).length / passes.length) * 100)
+        : 0,
+    };
+  }, [analyticsQuery.data, locale]);
 
   function applyProgram(next: ProgramType) {
     setProgram(next);
@@ -117,17 +302,83 @@ function MerchantDashboard() {
 
   function onLogo(file: File | undefined) {
     if (!file) return;
+    setLogoFile(file);
     const reader = new FileReader();
     reader.onload = () => setDesign((d) => ({ ...d, logoUrl: String(reader.result) }));
     reader.readAsDataURL(file);
   }
 
+  async function updateBusiness(values: Record<string, unknown>, successMessage: string) {
+    if (!business) return;
+    setSaving(true);
+    const { error } = await supabase.from("businesses").update(values).eq("id", business.id);
+    setSaving(false);
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
+    await businessesQuery.refetch();
+    toast.success(successMessage);
+  }
+
+  async function saveDesign() {
+    if (!business) return;
+    let logoUrl = business.logo_url;
+    if (logoFile) {
+      const extension = logoFile.name.split(".").pop()?.toLowerCase() || "png";
+      const path = `${business.id}/logo-${Date.now()}.${extension}`;
+      const { error: uploadError } = await supabase.storage
+        .from("business-assets")
+        .upload(path, logoFile, { contentType: logoFile.type });
+      if (uploadError) {
+        toast.error(uploadError.message);
+        return;
+      }
+      logoUrl = supabase.storage.from("business-assets").getPublicUrl(path).data.publicUrl;
+    }
+    await updateBusiness(
+      {
+        name_ar: design.businessName,
+        name_en: design.businessNameEn,
+        logo_url: logoUrl,
+        brand_color: design.background,
+        accent_color: design.accent,
+        program_type: program,
+        offer_ar: design.headline,
+        offer_en: design.headlineEn,
+        target_stamps: design.targetStamps,
+        sar_per_point: design.sarPerPoint,
+      },
+      ar ? "تم حفظ تصميم البطاقة" : "Pass design saved",
+    );
+  }
+
+  async function saveReminder(key: "d14" | "d30" | "d60", enabled: boolean) {
+    if (!business) return;
+    const next = { ...reminders, [key]: enabled };
+    setReminders(next);
+    const { error } = await supabase.from("business_automations").upsert({
+      business_id: business.id,
+      inactive_14_enabled: next.d14,
+      inactive_30_enabled: next.d30,
+      inactive_60_enabled: next.d60,
+      updated_at: new Date().toISOString(),
+    });
+    if (error) {
+      setReminders(reminders);
+      toast.error(error.message);
+      return;
+    }
+    toast.success(ar ? "تم تحديث الأتمتة" : "Automation updated");
+  }
+
   async function broadcast(segment: "all" | "inactive_14" | "inactive_30" | "inactive_60") {
+    if (!business) return;
     setSending(true);
     try {
       const res = await sendWalletPush({
         data: {
-          slug: "elite-coffee",
+          slug: business.slug,
           titleAr: design.businessName,
           titleEn: design.businessNameEn,
           bodyAr: pushAr,
@@ -147,11 +398,98 @@ function MerchantDashboard() {
     }
   }
 
+  if (!authReady) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-background">
+        <Loader2 className="size-7 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <AuthSignIn
+        ar={ar}
+        redirectPath="/dashboard"
+        title={ar ? "تسجيل دخول التاجر" : "Merchant sign in"}
+        description={
+          ar
+            ? "استخدم حساب التاجر المرتبط بمنشأتك."
+            : "Use the merchant account assigned to your business."
+        }
+      />
+    );
+  }
+
+  if (adminRoleQuery.isLoading || businessesQuery.isLoading) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-background">
+        <Loader2 className="size-7 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (adminRoleQuery.data?.role === "super_admin") {
+    return <Navigate to="/admin" replace />;
+  }
+
+  if (businessesQuery.isError || !business) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-background px-4">
+        <div className="panel max-w-md p-6 text-center">
+          <ShieldAlert className="mx-auto size-9 text-destructive" />
+          <h1 className="mt-4 text-xl font-bold">
+            {ar ? "لا توجد منشأة مرتبطة" : "No business assigned"}
+          </h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            {businessesQuery.isError
+              ? businessesQuery.error.message
+              : ar
+                ? "اطلب من المشرف ربط حسابك بمنشأة."
+                : "Ask an administrator to assign your account to a business."}
+          </p>
+          <Button className="mt-5" variant="outline" onClick={() => supabase.auth.signOut()}>
+            {ar ? "تسجيل الخروج" : "Sign out"}
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen">
-      <PortalNav title={t("merchantPortal")} subtitle={ar ? design.businessName : design.businessNameEn} />
+      <PortalNav
+        title={t("merchantPortal")}
+        subtitle={ar ? design.businessName : design.businessNameEn}
+      />
 
       <main className="mx-auto max-w-7xl px-4 py-8">
+        <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
+          <div className="min-w-64 space-y-2">
+            <Label htmlFor="active-business">{ar ? "المنشأة" : "Business"}</Label>
+            <select
+              id="active-business"
+              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+              value={business.id}
+              onChange={(event) => setBusinessId(event.target.value)}
+              disabled={businesses.length === 1}
+            >
+              {businesses.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {ar ? item.name_ar : item.name_en}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-muted-foreground" dir="ltr">
+              {user.email}
+            </span>
+            <Button size="sm" variant="outline" onClick={() => supabase.auth.signOut()}>
+              <LogOut className="size-4" /> {ar ? "تسجيل الخروج" : "Sign out"}
+            </Button>
+          </div>
+        </div>
         <Tabs defaultValue="designer">
           <TabsList className="flex flex-wrap">
             <TabsTrigger value="designer">{t("passDesigner")}</TabsTrigger>
@@ -162,7 +500,10 @@ function MerchantDashboard() {
           </TabsList>
 
           {/* Pass designer */}
-          <TabsContent value="designer" className="mt-4 grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
+          <TabsContent
+            value="designer"
+            className="mt-4 grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]"
+          >
             <div className="panel space-y-5 p-6">
               <div>
                 <Label className="mb-2 block">{t("programs")}</Label>
@@ -197,7 +538,9 @@ function MerchantDashboard() {
                   />
                 </div>
                 <div>
-                  <Label htmlFor="nameEn">{ar ? "اسم المنشأة (إنجليزي)" : "Business name (EN)"}</Label>
+                  <Label htmlFor="nameEn">
+                    {ar ? "اسم المنشأة (إنجليزي)" : "Business name (EN)"}
+                  </Label>
                   <Input
                     id="nameEn"
                     value={design.businessNameEn}
@@ -295,8 +638,8 @@ function MerchantDashboard() {
                 </div>
               )}
 
-              <Button onClick={() => toast.success(ar ? "تم حفظ تصميم البطاقة" : "Pass design saved")}>
-                {t("save")}
+              <Button onClick={saveDesign} disabled={saving}>
+                {saving ? <Loader2 className="size-4 animate-spin" /> : t("save")}
               </Button>
               <p className="text-xs text-muted-foreground">
                 {ar ? "قالب مرجعي:" : "Template:"} <code>{tpl.id}</code>
@@ -313,7 +656,9 @@ function MerchantDashboard() {
 
           {/* PIN */}
           <TabsContent value="pin" className="panel mt-4 max-w-md space-y-4 p-6">
-            <Label htmlFor="pin">{ar ? "رمز الكاشير المكون من ٤ أرقام" : "4-digit cashier PIN"}</Label>
+            <Label htmlFor="pin">
+              {ar ? "رمز الكاشير المكون من ٤ أرقام" : "4-digit cashier PIN"}
+            </Label>
             <Input
               id="pin"
               inputMode="numeric"
@@ -323,11 +668,13 @@ function MerchantDashboard() {
               className="w-32 text-center text-2xl tracking-[0.5em]"
             />
             <Button
-              disabled={pin.length !== 4}
-              onClick={() => {
-                window.localStorage.setItem("cashier_pin", pin);
-                toast.success(ar ? "تم تحديث الرمز" : "PIN updated");
-              }}
+              disabled={pin.length !== 4 || saving}
+              onClick={() =>
+                updateBusiness(
+                  { cashier_pin: pin },
+                  ar ? "تم تحديث رمز الكاشير" : "Cashier PIN updated",
+                )
+              }
             >
               {t("save")}
             </Button>
@@ -353,14 +700,37 @@ function MerchantDashboard() {
               </div>
               <div>
                 <Label htmlFor="gAr">{ar ? "نص التنبيه (عربي)" : "Proximity text (AR)"}</Label>
-                <Textarea id="gAr" value={geoAr} onChange={(e) => setGeoAr(e.target.value)} dir="rtl" />
+                <Textarea
+                  id="gAr"
+                  value={geoAr}
+                  onChange={(e) => setGeoAr(e.target.value)}
+                  dir="rtl"
+                />
               </div>
               <div>
                 <Label htmlFor="gEn">{ar ? "نص التنبيه (إنجليزي)" : "Proximity text (EN)"}</Label>
-                <Textarea id="gEn" value={geoEn} onChange={(e) => setGeoEn(e.target.value)} dir="ltr" />
+                <Textarea
+                  id="gEn"
+                  value={geoEn}
+                  onChange={(e) => setGeoEn(e.target.value)}
+                  dir="ltr"
+                />
               </div>
-              <Button onClick={() => toast.success(ar ? "تم حفظ الموقع" : "Location saved")}>
-                {t("save")}
+              <Button
+                disabled={saving}
+                onClick={() =>
+                  updateBusiness(
+                    {
+                      latitude: lat ? Number(lat) : null,
+                      longitude: lng ? Number(lng) : null,
+                      geo_text_ar: geoAr,
+                      geo_text_en: geoEn,
+                    },
+                    ar ? "تم حفظ الموقع" : "Location saved",
+                  )
+                }
+              >
+                {saving ? <Loader2 className="size-4 animate-spin" /> : t("save")}
               </Button>
             </div>
             <div className="panel overflow-hidden">
@@ -378,11 +748,21 @@ function MerchantDashboard() {
               <h2 className="text-lg font-semibold">{ar ? "حملة فورية" : "Instant broadcast"}</h2>
               <div>
                 <Label htmlFor="pAr">{ar ? "نص الإشعار (عربي)" : "Message (AR)"}</Label>
-                <Textarea id="pAr" value={pushAr} onChange={(e) => setPushAr(e.target.value)} dir="rtl" />
+                <Textarea
+                  id="pAr"
+                  value={pushAr}
+                  onChange={(e) => setPushAr(e.target.value)}
+                  dir="rtl"
+                />
               </div>
               <div>
                 <Label htmlFor="pEn">{ar ? "نص الإشعار (إنجليزي)" : "Message (EN)"}</Label>
-                <Textarea id="pEn" value={pushEn} onChange={(e) => setPushEn(e.target.value)} dir="ltr" />
+                <Textarea
+                  id="pEn"
+                  value={pushEn}
+                  onChange={(e) => setPushEn(e.target.value)}
+                  dir="ltr"
+                />
               </div>
               <Button disabled={sending} onClick={() => broadcast("all")}>
                 {sending ? "…" : t("send")}
@@ -400,7 +780,10 @@ function MerchantDashboard() {
                   ["d60", 60, "inactive_60"],
                 ] as const
               ).map(([key, days, segment]) => (
-                <div key={key} className="flex items-center justify-between rounded-lg border border-border p-3">
+                <div
+                  key={key}
+                  className="flex items-center justify-between rounded-lg border border-border p-3"
+                >
                   <div>
                     <p className="font-medium">
                       {ar ? `بعد ${days} يوماً من الخمول` : `After ${days} days inactive`}
@@ -414,10 +797,7 @@ function MerchantDashboard() {
                   </div>
                   <Switch
                     checked={reminders[key]}
-                    onCheckedChange={(v) => {
-                      setReminders({ ...reminders, [key]: v });
-                      toast.success(ar ? "تم تحديث الأتمتة" : "Automation updated");
-                    }}
+                    onCheckedChange={(value) => saveReminder(key, value)}
                   />
                 </div>
               ))}
@@ -431,20 +811,32 @@ function MerchantDashboard() {
                 {ar ? "التثبيت مقابل الاستبدال" : "Installs vs redemptions"}
               </h2>
               <ResponsiveContainer width="100%" height={260}>
-                <LineChart data={INSTALLS}>
+                <LineChart data={analytics.days}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                   <XAxis dataKey="d" stroke="var(--muted-foreground)" fontSize={12} />
                   <YAxis stroke="var(--muted-foreground)" fontSize={12} />
                   <Tooltip />
-                  <Line type="monotone" dataKey="installs" stroke="var(--primary)" strokeWidth={2} />
-                  <Line type="monotone" dataKey="redemptions" stroke="var(--accent)" strokeWidth={2} />
+                  <Line
+                    type="monotone"
+                    dataKey="installs"
+                    stroke="var(--primary)"
+                    strokeWidth={2}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="redemptions"
+                    stroke="var(--accent)"
+                    strokeWidth={2}
+                  />
                 </LineChart>
               </ResponsiveContainer>
             </div>
             <div className="panel p-6">
-              <h2 className="mb-4 text-lg font-semibold">{ar ? "ساعات الذروة" : "Peak visit hours"}</h2>
+              <h2 className="mb-4 text-lg font-semibold">
+                {ar ? "ساعات الذروة" : "Peak visit hours"}
+              </h2>
               <ResponsiveContainer width="100%" height={260}>
-                <BarChart data={PEAK}>
+                <BarChart data={analytics.hours}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                   <XAxis dataKey="h" stroke="var(--muted-foreground)" fontSize={12} />
                   <YAxis stroke="var(--muted-foreground)" fontSize={12} />
@@ -455,9 +847,9 @@ function MerchantDashboard() {
             </div>
             <div className="grid gap-4 sm:grid-cols-3 lg:col-span-2">
               {[
-                [t("installs"), "578"],
-                [t("redemptions"), "331"],
-                [t("retention"), "64%"],
+                [t("installs"), String(analytics.installs)],
+                [t("redemptions"), String(analytics.redemptions)],
+                [t("retention"), `${analytics.retention}%`],
               ].map(([label, value]) => (
                 <div key={label} className="panel p-5">
                   <p className="text-sm text-muted-foreground">{label}</p>

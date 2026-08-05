@@ -1,19 +1,18 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
-const API_BASE = "https://api.walletwallet.com/v1";
-
 async function walletFetch(path: string, body: unknown) {
   const apiKey = process.env["WALLETWALLET_API_KEY"];
-  if (!apiKey) {
+  const apiUrl = process.env["WALLETWALLET_API_URL"];
+  if (!apiKey || !apiUrl) {
     return {
       ok: false as const,
       status: 503,
-      error: "WALLETWALLET_API_KEY is not configured",
+      error: "WalletWallet server configuration is incomplete",
       data: null,
     };
   }
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(`${apiUrl.replace(/\/$/, "")}${path}`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -43,7 +42,7 @@ const createPassSchema = z.object({
 });
 
 export const createWalletPass = createServerFn({ method: "POST" })
-  .inputValidator((d: unknown) => createPassSchema.parse(d))
+  .validator((d: unknown) => createPassSchema.parse(d))
   .handler(async ({ data }) => {
     const result = await walletFetch("/passes", {
       tenant_slug: data.slug,
@@ -76,7 +75,7 @@ const updatePassSchema = z.object({
 });
 
 export const updateWalletPass = createServerFn({ method: "POST" })
-  .inputValidator((d: unknown) => updatePassSchema.parse(d))
+  .validator((d: unknown) => updatePassSchema.parse(d))
   .handler(async ({ data }) => {
     const result = await walletFetch(`/passes/${encodeURIComponent(data.serial)}/update`, {
       action: data.action,
@@ -96,7 +95,7 @@ const pushSchema = z.object({
 });
 
 export const sendWalletPush = createServerFn({ method: "POST" })
-  .inputValidator((d: unknown) => pushSchema.parse(d))
+  .validator((d: unknown) => pushSchema.parse(d))
   .handler(async ({ data }) => {
     const result = await walletFetch("/push/broadcast", {
       tenant_slug: data.slug,

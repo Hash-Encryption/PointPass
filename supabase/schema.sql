@@ -1,5 +1,5 @@
 -- Wallet Loyalty SaaS — schema for the connected Supabase project.
--- Run this in the SQL editor of https://cxtmckbpnjxkrsuwlvwl.supabase.co
+-- Run this in the SQL editor of the Supabase project configured in your environment.
 
 create type public.app_role as enum ('super_admin', 'merchant', 'cashier');
 create type public.program_type as enum ('stamp', 'points', 'coupon_morph');
@@ -120,9 +120,3 @@ alter table public.hardware_dispatch enable row level security;
 create policy "admin manages hardware" on public.hardware_dispatch
   for all to authenticated using (public.has_role(auth.uid(), 'super_admin'))
   with check (public.has_role(auth.uid(), 'super_admin'));
-
-insert into public.businesses (slug, name_ar, name_en, offer_ar, offer_en, active_passes, redemptions, plan)
-values
-  ('elite-coffee', 'مقهى النخبة', 'Elite Coffee', 'اشترِ ٩ واحصل على واحدة مجاناً', 'Buy 9, get 1 free', 2841, 918, 'growth'),
-  ('golden-bites', 'مطعم البيك الذهبي', 'Golden Bites', 'نقطة لكل ١٠ ريال', '1 point per 10 SAR', 1203, 402, 'starter'),
-  ('demo-cafe', 'مقهى تجريبي', 'Demo Cafe', 'خصم ٢٠٪ على أول زيارة', '20% off first visit', 310, 74, 'starter');
