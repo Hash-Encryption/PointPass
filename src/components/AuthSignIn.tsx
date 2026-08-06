@@ -11,11 +11,13 @@ export function AuthSignIn({
   description,
   redirectPath,
   ar,
+  onSuccess,
 }: {
   title: string;
   description: string;
   redirectPath: string;
   ar: boolean;
+  onSuccess?: () => void;
 }) {
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
@@ -33,6 +35,8 @@ export function AuthSignIn({
       if (error) {
         setPassword("");
         toast.error(error.message);
+      } else {
+        onSuccess?.();
       }
     } else {
       const { data, error } = await supabase.auth.signUp({
@@ -53,6 +57,8 @@ export function AuthSignIn({
                 ? "الحساب موجود بالفعل. يرجى تسجيل الدخول أو استعادة كلمة المرور."
                 : "Account already registered. Please sign in or use 'Forgot Password'.",
             );
+          } else {
+            onSuccess?.();
           }
         } else {
           setSubmitting(false);
@@ -61,6 +67,7 @@ export function AuthSignIn({
       } else if (data.session) {
         setSubmitting(false);
         toast.success(ar ? "تم إنشاء الحساب وتسجيل الدخول!" : "Account created and signed in!");
+        onSuccess?.();
       } else {
         setSubmitting(false);
         toast.success(
@@ -68,6 +75,7 @@ export function AuthSignIn({
             ? "تم إنشاء الحساب! تحقق من بريدك الإلكتروني إذا تطلب الأمر لتأكيده."
             : "Account created! Check your email if confirmation is required.",
         );
+        onSuccess?.();
       }
     }
   }
