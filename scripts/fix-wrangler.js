@@ -1,9 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
 
-// Remove generated .output/server/wrangler.json to prevent Cloudflare Pages Wrangler conflicts
-const generatedWrangler = path.join(process.cwd(), ".output", "server", "wrangler.json");
-if (fs.existsSync(generatedWrangler)) {
-  fs.unlinkSync(generatedWrangler);
-  console.log("Removed generated .output/server/wrangler.json to prevent Cloudflare build conflicts.");
+function fixAssetsBinding(filePath) {
+  if (fs.existsSync(filePath)) {
+    let content = fs.readFileSync(filePath, "utf8");
+    if (content.includes('"ASSETS"')) {
+      content = content.replace(/"binding":\s*"ASSETS"/g, '"binding": "STATIC_ASSETS"');
+      fs.writeFileSync(filePath, content, "utf8");
+      console.log(`Replaced reserved ASSETS binding in ${filePath}`);
+    }
+  }
 }
+
+fixAssetsBinding(path.join(process.cwd(), ".output", "server", "wrangler.json"));
+fixAssetsBinding(path.join(process.cwd(), ".wrangler", "deploy", "config.json"));
