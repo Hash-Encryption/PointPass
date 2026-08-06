@@ -1,11 +1,14 @@
 import { createClient } from "@supabase/supabase-js";
 
-const SUPABASE_URL = import.meta.env["VITE_SUPABASE_URL"];
-const SUPABASE_ANON_KEY = import.meta.env["VITE_SUPABASE_ANON_KEY"];
+const SUPABASE_URL =
+  import.meta.env["VITE_SUPABASE_URL"] ||
+  import.meta.env["SUPABASE_URL"] ||
+  "https://tldzmrghbvqfaclantlr.supabase.co";
 
-if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-  throw new Error("VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY must be configured");
-}
+const SUPABASE_ANON_KEY =
+  import.meta.env["VITE_SUPABASE_ANON_KEY"] ||
+  import.meta.env["SUPABASE_ANON_KEY"] ||
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRsZHptcmdoYnZxZmFjbGFudGxyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ4MjQ4MjUsImV4cCI6MjEwMDQwMDgyNX0.KvpR7DqUi-Ed4E3s_wVkJXMqB5cj3DHKEmis_jiTffw";
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: true, autoRefreshToken: true },
