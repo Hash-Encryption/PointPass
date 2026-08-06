@@ -1,6 +1,6 @@
 import { createFileRoute, Navigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import { toast } from "sonner";
 import { PortalNav } from "@/components/PortalNav";
@@ -30,7 +30,6 @@ import {
   QrCode,
   ShieldAlert,
   Trash2,
-  X,
 } from "lucide-react";
 import {
   Bar,
@@ -89,15 +88,11 @@ type TransactionRow = { action: string; created_at: string };
 function MerchantDashboard() {
   const { locale, t } = useLocale();
   const ar = locale === "ar";
-  const DRAFT_KEY = "pointpass_card_draft";
-  const restoredRef = useRef(false);
-
   const [authReady, setAuthReady] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [businessId, setBusinessId] = useState("");
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
-  const [showAuthModal, setShowAuthModal] = useState(false);
 
   const [program, setProgram] = useState<ProgramType>("stamp");
   const tpl = PASS_TEMPLATES[program];
@@ -127,7 +122,7 @@ function MerchantDashboard() {
   const [pushEn, setPushEn] = useState("");
   const [reminders, setReminders] = useState({ d14: true, d30: true, d60: false });
   const [sending, setSending] = useState(false);
-  const [activeTab, setActiveTab] = useState("designer");
+  const [activeTab, setActiveTab] = useState("overview");
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deletingCampaign, setDeletingCampaign] = useState(false);
   const [showResetPassword, setShowResetPassword] = useState(false);
@@ -156,37 +151,6 @@ function MerchantDashboard() {
       data.subscription.unsubscribe();
     };
   }, []);
-
-  // Restore draft ONCE on mount with restoredRef guard (prevents infinite notification loop)
-  useEffect(() => {
-    if (restoredRef.current) return;
-    restoredRef.current = true;
-
-    try {
-      const saved = localStorage.getItem(DRAFT_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed?.design) {
-          setDesign(parsed.design);
-          if (parsed.program) setProgram(parsed.program);
-          toast.info(ar ? "تم استعادة مسودة بطاقتك المحفوظة" : "Restored your saved pass draft");
-        }
-      }
-    } catch {
-      // Ignore cache parse errors
-    }
-  }, [ar]);
-
-  // Auto-save draft changes when user is not signed in
-  useEffect(() => {
-    if (!user && (design.businessName || design.headline || design.businessNameEn)) {
-      try {
-        localStorage.setItem(DRAFT_KEY, JSON.stringify({ design, program }));
-      } catch {
-        // Ignore storage write errors
-      }
-    }
-  }, [design, program, user]);
 
   const adminRoleQuery = useQuery({
     queryKey: ["dashboard-admin-role", user?.id],
@@ -283,42 +247,6 @@ function MerchantDashboard() {
     setGeoEn(business.geo_text_en ?? "");
     setLogoFile(null);
   }, [business, businessId]);
-
-  // Sync draft to Supabase post-auth
-  useEffect(() => {
-    if (!user || !business) return;
-    try {
-      const saved = localStorage.getItem(DRAFT_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed?.design) {
-          void (async () => {
-            await supabase.from("businesses").update({
-              name_ar: parsed.design.businessName || business.name_ar,
-              name_en: parsed.design.businessNameEn || business.name_en,
-              brand_color: parsed.design.background || business.brand_color,
-              accent_color: parsed.design.accent || business.accent_color,
-              program_type: parsed.program || business.program_type,
-              offer_ar: parsed.design.headline || business.offer_ar,
-              offer_en: parsed.design.headlineEn || business.offer_en,
-              target_stamps: parsed.design.targetStamps || business.target_stamps,
-              sar_per_point: parsed.design.sarPerPoint || business.sar_per_point,
-            }).eq("id", business.id);
-
-            localStorage.removeItem(DRAFT_KEY);
-            await businessesQuery.refetch();
-            toast.success(
-              ar
-                ? "تم حفظ مسودتك ونشر بطاقتك بنجاح!"
-                : "Your card draft was published successfully!",
-            );
-          })();
-        }
-      }
-    } catch {
-      // Ignore errors
-    }
-  }, [user, business, ar]);
 
   const analyticsQuery = useQuery({
     queryKey: ["merchant-analytics", business?.id],
@@ -479,70 +407,9 @@ function MerchantDashboard() {
   }
 
   async function saveDesign() {
-    if (!user) {
-      try {
-        localStorage.setItem(DRAFT_KEY, JSON.stringify({ design, program }));
-      } catch {
-        // Ignore cache write errors
-      }
-      setShowAuthModal(true);
-      toast.info(
-        ar
-          ? "يرجى تسجيل الدخول أو إنشاء حساب لنشر بطاقتك"
-          : "Please sign in or create an account to publish your pass.",
-      );
-      return;
-    }
-
-    if (!business) {
-      setSaving(true);
-      const slug = (design.businessNameEn || design.businessName || "my-business")
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-|-$/g, "") || `biz-${Date.now().toString(36)}`;
-
-      const { data: newBiz, error: createError } = await supabase
-        .from("businesses")
-        .insert({
-          slug,
-          name_ar: design.businessName || "منشأتي",
-          name_en: design.businessNameEn || "My Business",
-          owner_id: user.id,
-          merchant_email: user.email,
-          brand_color: design.background,
-          accent_color: design.accent,
-          program_type: program,
-          offer_ar: design.headline,
-          offer_en: design.headlineEn,
-          target_stamps: design.targetStamps,
-          sar_per_point: design.sarPerPoint,
-          cashier_pin: "1234",
-        })
-        .select()
-        .single();
-
-      setSaving(false);
-      if (createError) {
-        toast.error(createError.message);
-        return;
-      }
-
-      if (newBiz) {
-        await supabase.from("user_roles").insert({
-          user_id: user.id,
-          role: "merchant",
-          business_id: newBiz.id,
-        });
-        localStorage.removeItem(DRAFT_KEY);
-        await businessesQuery.refetch();
-        toast.success(ar ? "تم إنشاء المنشأة ونشر البطاقة!" : "Business created & pass published!");
-        setActiveTab("overview");
-        return;
-      }
-    }
-
-    let logoUrl = business?.logo_url ?? null;
-    if (logoFile && business) {
+    if (!business) return;
+    let logoUrl = business.logo_url;
+    if (logoFile) {
       const extension = logoFile.name.split(".").pop()?.toLowerCase() || "png";
       const path = `${business.id}/logo-${Date.now()}.${extension}`;
       const { error: uploadError } = await supabase.storage
@@ -569,7 +436,6 @@ function MerchantDashboard() {
       },
       ar ? "تم حفظ تصميم البطاقة والانتقال إلى لوحة التحكم الرئيسية" : "Pass design saved! Switched to main overview.",
     );
-    localStorage.removeItem(DRAFT_KEY);
     setActiveTab("overview");
   }
 
@@ -626,41 +492,54 @@ function MerchantDashboard() {
     );
   }
 
-  if (user) {
-    if (adminRoleQuery.isLoading || businessesQuery.isLoading) {
-      return (
-        <div className="grid min-h-screen place-items-center bg-background">
-          <Loader2 className="size-7 animate-spin text-primary" />
-        </div>
-      );
-    }
+  if (!user) {
+    return (
+      <AuthSignIn
+        ar={ar}
+        redirectPath="/dashboard"
+        title={ar ? "تسجيل دخول التاجر" : "Merchant sign in"}
+        description={
+          ar
+            ? "استخدم حساب التاجر المرتبط بمنشأتك."
+            : "Use the merchant account assigned to your business."
+        }
+      />
+    );
+  }
 
-    if (adminRoleQuery.data?.role === "super_admin") {
-      return <Navigate to="/admin" replace />;
-    }
+  if (adminRoleQuery.isLoading || businessesQuery.isLoading) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-background">
+        <Loader2 className="size-7 animate-spin text-primary" />
+      </div>
+    );
+  }
 
-    if (businessesQuery.isError || !business) {
-      return (
-        <div className="grid min-h-screen place-items-center bg-background px-4">
-          <div className="panel max-w-md p-6 text-center">
-            <ShieldAlert className="mx-auto size-9 text-destructive" />
-            <h1 className="mt-4 text-xl font-bold">
-              {ar ? "لا توجد منشأة مرتبطة" : "No business assigned"}
-            </h1>
-            <p className="mt-2 text-sm text-muted-foreground">
-              {businessesQuery.isError
-                ? businessesQuery.error.message
-                : ar
-                  ? "اطلب من المشرف ربط حسابك بمنشأة."
-                  : "Ask an administrator to assign your account to a business."}
-            </p>
-            <Button className="mt-5" variant="outline" onClick={() => supabase.auth.signOut()}>
-              {ar ? "تسجيل الخروج" : "Sign out"}
-            </Button>
-          </div>
+  if (adminRoleQuery.data?.role === "super_admin") {
+    return <Navigate to="/admin" replace />;
+  }
+
+  if (businessesQuery.isError || !business) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-background px-4">
+        <div className="panel max-w-md p-6 text-center">
+          <ShieldAlert className="mx-auto size-9 text-destructive" />
+          <h1 className="mt-4 text-xl font-bold">
+            {ar ? "لا توجد منشأة مرتبطة" : "No business assigned"}
+          </h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            {businessesQuery.isError
+              ? businessesQuery.error.message
+              : ar
+                ? "اطلب من المشرف ربط حسابك بمنشأة."
+                : "Ask an administrator to assign your account to a business."}
+          </p>
+          <Button className="mt-5" variant="outline" onClick={() => supabase.auth.signOut()}>
+            {ar ? "تسجيل الخروج" : "Sign out"}
+          </Button>
         </div>
-      );
-    }
+      </div>
+    );
   }
 
   return (
@@ -741,68 +620,33 @@ function MerchantDashboard() {
       />
 
       <main className="mx-auto max-w-7xl px-4 py-8">
-        {!user && (
-          <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-primary/30 bg-primary/5 p-4 shadow-xs">
-            <div className="flex items-center gap-3">
-              <Badge variant="default" className="bg-primary text-primary-foreground font-semibold">
-                {ar ? "معاينة كزائر" : "Guest Designer Mode"}
-              </Badge>
-              <p className="text-sm font-medium text-foreground">
-                {ar
-                  ? "قم بإعداد تصميم بطاقتك الآن. عند الانتهاء اضغط (إنشاء ونشر البطاقة)."
-                  : "Customize your pass design now. Click Create & Publish Card when ready."}
-              </p>
-            </div>
-            <Button size="sm" onClick={() => setShowAuthModal(true)}>
-              {ar ? "تسجيل الدخول / حساب جديد" : "Sign In / Register"}
+        <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
+          <div className="min-w-64 space-y-2">
+            <Label htmlFor="active-business">{ar ? "المنشأة" : "Business"}</Label>
+            <select
+              id="active-business"
+              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+              value={business.id}
+              onChange={(event) => setBusinessId(event.target.value)}
+              disabled={businesses.length === 1}
+            >
+              {businesses.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {ar ? item.name_ar : item.name_en}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-muted-foreground" dir="ltr">
+              {user.email}
+            </span>
+            <Button size="sm" variant="outline" onClick={() => supabase.auth.signOut()}>
+              <LogOut className="size-4" /> {ar ? "تسجيل الخروج" : "Sign out"}
             </Button>
           </div>
-        )}
-
-        {user && business && (
-          <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
-            <div className="min-w-64 space-y-2">
-              <Label htmlFor="active-business">{ar ? "المنشأة" : "Business"}</Label>
-              <select
-                id="active-business"
-                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                value={business.id}
-                onChange={(event) => setBusinessId(event.target.value)}
-                disabled={businesses.length === 1}
-              >
-                {businesses.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {ar ? item.name_ar : item.name_en}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="text-xs text-muted-foreground" dir="ltr">
-                {user.email}
-              </span>
-              <Button size="sm" variant="outline" onClick={() => supabase.auth.signOut()}>
-                <LogOut className="size-4" /> {ar ? "تسجيل الخروج" : "Sign out"}
-              </Button>
-            </div>
-          </div>
-        )}
-
-        <Tabs
-          value={activeTab}
-          onValueChange={(tab) => {
-            if (!user && tab !== "designer") {
-              toast.info(
-                ar
-                  ? "يرجى تسجيل الدخول للوصول للإحصائيات والرموز والحملات"
-                  : "Please sign in to access analytics, PINs, and campaigns.",
-              );
-              setShowAuthModal(true);
-              return;
-            }
-            setActiveTab(tab);
-          }}
-        >
+        </div>
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="flex flex-wrap">
             <TabsTrigger value="overview">
               <LayoutDashboard className="me-1.5 size-4" />
@@ -1068,16 +912,8 @@ function MerchantDashboard() {
                 </div>
               )}
 
-              <Button onClick={saveDesign} disabled={saving} className="w-full sm:w-auto font-semibold">
-                {saving ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : user ? (
-                  t("save")
-                ) : ar ? (
-                  "إنشاء ونشر البطاقة"
-                ) : (
-                  "Create & Publish Card"
-                )}
+              <Button onClick={saveDesign} disabled={saving}>
+                {saving ? <Loader2 className="size-4 animate-spin" /> : t("save")}
               </Button>
               <p className="text-xs text-muted-foreground">
                 {ar ? "قالب مرجعي:" : "Template:"} <code>{tpl.id}</code>
@@ -1350,30 +1186,6 @@ function MerchantDashboard() {
                   )}
                 </Button>
               </div>
-            </div>
-          </div>
-        )}
-        {showAuthModal && (
-          <div className="fixed inset-0 z-50 grid place-items-center bg-background/80 backdrop-blur-xs px-4">
-            <div className="relative w-full max-w-sm">
-              <button
-                type="button"
-                onClick={() => setShowAuthModal(false)}
-                className="absolute top-4 right-4 z-10 rounded-full p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-              >
-                <X className="size-5" />
-              </button>
-              <AuthSignIn
-                ar={ar}
-                redirectPath="/dashboard"
-                title={ar ? "حفظ ونشر بطاقتك" : "Publish Your Loyalty Pass"}
-                description={
-                  ar
-                    ? "سجّل حسابك الآن لحفظ التصميم، تفعيل روابط الانضمام، وإدارة الأختام."
-                    : "Create an account to save your design, activate join links, and track scans."
-                }
-                onSuccess={() => setShowAuthModal(false)}
-              />
             </div>
           </div>
         )}
