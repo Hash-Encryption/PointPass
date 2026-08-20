@@ -5,7 +5,7 @@ import { Apple, Loader2, Smartphone, Sparkles } from "lucide-react";
 import { useLocale } from "@/lib/i18n";
 import { supabase, resolveSlugFromHost } from "@/lib/supabase";
 import { createWalletPass } from "@/lib/wallet.functions";
-import { PASS_TEMPLATES, autoContrast, type ProgramType } from "@/constants/defaultTemplates";
+import { autoContrast, type ProgramType } from "@/constants/defaultTemplates";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -71,11 +71,7 @@ function ClaimPage() {
       setBusinessLoading(true);
       setBusinessError(null);
       const { data, error } = await supabase
-        .from("businesses")
-        .select(
-          "slug,name_ar,name_en,logo_url,brand_color,accent_color,program_type,offer_ar,offer_en",
-        )
-        .eq("slug", slug)
+        .rpc("get_public_business_by_slug", { _slug: slug })
         .maybeSingle();
       if (cancelled) return;
       setBusiness((data as Business | null) ?? null);
@@ -97,25 +93,10 @@ function ClaimPage() {
 
     setLoading(true);
     try {
-      try {
-        await supabase.from("pass_instances").insert({
-          business_slug: slug,
-          phone: effectivePhone,
-          program_type: business?.program_type ?? "stamp",
-        });
-      } catch {
-        // Non-fatal if table constraint or RLS warning occurs
-      }
-
       const res = await createWalletPass({
         data: {
           slug,
           phone: effectivePhone,
-          programType: business?.program_type ?? "stamp",
-          template: PASS_TEMPLATES[business?.program_type ?? "stamp"] as unknown as Record<
-            string,
-            unknown
-          >,
         },
       });
 
@@ -136,7 +117,11 @@ function ClaimPage() {
       }
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : ar ? "تعذر إنشاء البطاقة" : "Failed to create pass",
+        error instanceof Error
+          ? error.message
+          : ar
+            ? "تعذر إنشاء البطاقة"
+            : "Failed to create pass",
       );
     } finally {
       setLoading(false);
@@ -175,8 +160,10 @@ function ClaimPage() {
         <div className="flex items-center justify-between">
           <span className="text-xs opacity-70">{slug}.yourplatform.com</span>
           <button
+            type="button"
             className="rounded-full bg-black/10 px-3 py-1 text-xs font-semibold"
             onClick={toggle}
+            aria-label={ar ? "Switch to English" : "التبديل إلى العربية"}
           >
             {t("language")}
           </button>
@@ -186,7 +173,7 @@ function ClaimPage() {
           {business.logo_url ? (
             <img
               src={business.logo_url}
-              alt=""
+              alt={ar ? business.name_ar : business.name_en}
               className="mx-auto size-20 rounded-2xl object-contain"
               style={{ background: `${fg}18` }}
             />
@@ -230,7 +217,9 @@ function ClaimPage() {
 
               <div className="flex items-center gap-3 text-xs text-muted-foreground my-2">
                 <span className="h-px flex-1 bg-border" />
-                <span>{ar ? "أو أدخل رقم الجوال للمزامنة" : "or enter phone to sync across devices"}</span>
+                <span>
+                  {ar ? "أو أدخل رقم الجوال للمزامنة" : "or enter phone to sync across devices"}
+                </span>
                 <span className="h-px flex-1 bg-border" />
               </div>
 
@@ -249,8 +238,19 @@ function ClaimPage() {
                 />
               </div>
 
-              <Button type="submit" variant="outline" className="h-11 w-full text-sm" disabled={loading}>
-                {loading ? <Loader2 className="size-4 animate-spin" /> : ar ? "حفظ باستخدام الرقم" : "Save with Phone Number"}
+              <Button
+                type="submit"
+                variant="outline"
+                className="h-11 w-full text-sm"
+                disabled={loading}
+              >
+                {loading ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : ar ? (
+                  "حفظ باستخدام الرقم"
+                ) : (
+                  "Save with Phone Number"
+                )}
               </Button>
 
               <p className="text-center text-[11px] text-muted-foreground">
@@ -263,7 +263,7 @@ function ClaimPage() {
             <div className="space-y-3 text-center">
               <div className="flex items-center justify-center gap-2 text-primary font-bold text-lg">
                 <Sparkles className="size-5" />
-                <span>{ar ? "بطاقتك جاهزة 🎉" : "Your card is ready 🎉"}</span>
+                <span>{ar ? "بطاقتك جاهزة" : "Your card is ready"}</span>
               </div>
               <p className="text-xs text-muted-foreground">
                 {ar
@@ -274,7 +274,9 @@ function ClaimPage() {
               <Button
                 asChild={Boolean(links.apple)}
                 className={`h-12 w-full text-base ${
-                  isAppleDevice ? "bg-surface-dark text-surface-dark-foreground hover:bg-surface-dark/90 ring-2 ring-primary" : "bg-surface-dark text-surface-dark-foreground"
+                  isAppleDevice
+                    ? "bg-surface-dark text-surface-dark-foreground hover:bg-surface-dark/90 ring-2 ring-primary"
+                    : "bg-surface-dark text-surface-dark-foreground"
                 }`}
                 disabled={!links.apple}
               >

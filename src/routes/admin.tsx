@@ -46,6 +46,8 @@ type Tenant = {
   active_passes: number;
   redemptions: number;
   custom_domain: string | null;
+  merchant_email: string | null;
+  owner_id: string | null;
 };
 
 type HardwareDispatch = {
@@ -137,7 +139,9 @@ function AdminPortal() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("businesses")
-        .select("id,name_ar,name_en,slug,plan,status,active_passes,redemptions,custom_domain")
+        .select(
+          "id,name_ar,name_en,slug,plan,status,active_passes,redemptions,custom_domain,merchant_email,owner_id",
+        )
         .order("created_at", { ascending: false })
         .limit(50);
       if (error) throw error;
@@ -209,13 +213,13 @@ function AdminPortal() {
       setNewBusiness({ merchantEmail: "", slug: "", nameAr: "", nameEn: "", plan: "starter" });
       await queryClient.invalidateQueries({ queryKey: ["tenants"] });
       toast.success(
-        result.invitationSent
+        result.merchantLinked
           ? ar
-            ? "تم إنشاء المنشأة وإرسال دعوة التاجر"
-            : "Business created and merchant invitation sent"
-          : ar
             ? "تم إنشاء المنشأة وربط حساب التاجر الحالي"
-            : "Business created and existing merchant assigned",
+            : "Business created and existing merchant assigned"
+          : ar
+            ? "تم إنشاء المنشأة مسبقاً. يمكن للتاجر إنشاء حساب بنفس البريد."
+            : "Business pre-registered. The merchant can sign up with this email.",
       );
     },
     onError: (error: Error) => toast.error(error.message),
@@ -242,6 +246,7 @@ function AdminPortal() {
     return (
       <AuthSignIn
         ar={ar}
+        allowSignUp={false}
         redirectPath="/admin"
         title={ar ? "تسجيل دخول المشرف" : "Admin sign in"}
         description={
@@ -259,7 +264,7 @@ function AdminPortal() {
         <div className="panel max-w-md p-6 text-center">
           <ShieldAlert className="mx-auto size-9 text-destructive" />
           <h1 className="mt-4 text-xl font-bold">{ar ? "غير مصرح" : "Access denied"}</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
+          <p className="mt-2 text-sm text-muted-foreground" role="alert">
             {roleQuery.isError
               ? roleQuery.error.message
               : ar
@@ -332,8 +337,8 @@ function AdminPortal() {
                 <h2 className="font-semibold">{ar ? "إنشاء منشأة" : "Create business"}</h2>
                 <p className="mt-1 text-xs text-muted-foreground">
                   {ar
-                    ? "سيتم إرسال دعوة تلقائياً، أو ربط الحساب إذا كان موجوداً."
-                    : "An invitation is sent automatically, or an existing account is assigned."}
+                    ? "سيتم ربط الحساب الموجود، أو حجز المنشأة حتى يسجل التاجر بنفس البريد."
+                    : "An existing account is linked, or the business waits for this email to sign up."}
                 </p>
               </div>
               <div className="space-y-2 lg:col-span-2">
@@ -407,9 +412,9 @@ function AdminPortal() {
                   {createBusinessMutation.isPending ? (
                     <Loader2 className="size-4 animate-spin" />
                   ) : ar ? (
-                    "إنشاء وربط التاجر"
+                    "إنشاء المنشأة"
                   ) : (
-                    "Create and assign merchant"
+                    "Create business"
                   )}
                 </Button>
               </div>
@@ -428,6 +433,7 @@ function AdminPortal() {
                     <TableRow>
                       <TableHead>{ar ? "المنشأة" : "Business"}</TableHead>
                       <TableHead>Slug</TableHead>
+                      <TableHead>{ar ? "التاجر" : "Merchant"}</TableHead>
                       <TableHead>{ar ? "الباقة" : "Plan"}</TableHead>
                       <TableHead>{t("activePasses")}</TableHead>
                       <TableHead>{ar ? "الحالة" : "Status"}</TableHead>
@@ -441,6 +447,23 @@ function AdminPortal() {
                           {ar ? tenant.name_ar : tenant.name_en}
                         </TableCell>
                         <TableCell className="text-muted-foreground">{tenant.slug}</TableCell>
+                        <TableCell>
+                          <span className="block text-xs" dir="ltr">
+                            {tenant.merchant_email ?? "—"}
+                          </span>
+                          <Badge
+                            className="mt-1"
+                            variant={tenant.owner_id ? "secondary" : "outline"}
+                          >
+                            {tenant.owner_id
+                              ? ar
+                                ? "مرتبط"
+                                : "Linked"
+                              : ar
+                                ? "بانتظار التسجيل"
+                                : "Awaiting signup"}
+                          </Badge>
+                        </TableCell>
                         <TableCell className="capitalize">{tenant.plan}</TableCell>
                         <TableCell>{(tenant.active_passes ?? 0).toLocaleString()}</TableCell>
                         <TableCell>
