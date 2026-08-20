@@ -1,11 +1,13 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+// @ts-expect-error Cloudflare supplies this runtime module to Pages Functions.
+import { env } from "cloudflare:workers";
 import { createServerSupabaseClient } from "@/lib/server-supabase";
 import { buildWalletPassPayload } from "@/lib/wallet-payload";
 
 async function walletFetch(method: "POST" | "PUT", path: string, body: unknown) {
-  const apiKey = process.env["WALLETWALLET_API_KEY"];
-  const apiUrl = process.env["WALLETWALLET_API_URL"];
+  const apiKey = env.WALLETWALLET_API_KEY ?? process.env["WALLETWALLET_API_KEY"];
+  const apiUrl = env.WALLETWALLET_API_URL ?? process.env["WALLETWALLET_API_URL"];
   if (!apiKey || !apiUrl) {
     return {
       ok: false as const,
