@@ -3,6 +3,7 @@
   "name": "pointpass",
   "compatibility_date": "2026-08-05",
   "compatibility_flags": ["nodejs_compat"],
+  "pages_build_output_dir": "dist",
   "vars": {
     "VITE_SUPABASE_URL": "https://cxtmckbpnjxkrsuwlvwl.supabase.co",
     "VITE_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN4dG1ja2Jwbmp4a3JzdXdsdndsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU4ODkyMjgsImV4cCI6MjEwMTQ2NTIyOH0.YjQudMUVdnwSQQiKCx3K8UZjC6aIJcnK-stdyUIeZHU",
