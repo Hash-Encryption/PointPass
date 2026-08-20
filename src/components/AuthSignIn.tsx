@@ -11,11 +11,13 @@ export function AuthSignIn({
   description,
   redirectPath,
   ar,
+  allowSignUp = true,
 }: {
   title: string;
   description: string;
   redirectPath: string;
   ar: boolean;
+  allowSignUp?: boolean;
 }) {
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
@@ -81,7 +83,7 @@ export function AuthSignIn({
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: {
-        shouldCreateUser: true,
+        shouldCreateUser: allowSignUp,
         emailRedirectTo: `${window.location.origin}${redirectPath}`,
       },
     });
@@ -126,27 +128,32 @@ export function AuthSignIn({
           <p className="mt-1 text-sm text-muted-foreground">{description}</p>
         </div>
 
-        {/* Mode Selector */}
-        <div className="grid grid-cols-2 rounded-lg bg-muted p-1 text-center text-xs font-semibold">
-          <button
-            type="button"
-            className={`rounded-md py-1.5 transition-colors ${
-              mode === "signin" ? "bg-background shadow-xs text-foreground" : "text-muted-foreground"
-            }`}
-            onClick={() => setMode("signin")}
-          >
-            {ar ? "تسجيل الدخول" : "Sign In"}
-          </button>
-          <button
-            type="button"
-            className={`rounded-md py-1.5 transition-colors ${
-              mode === "signup" ? "bg-background shadow-xs text-foreground" : "text-muted-foreground"
-            }`}
-            onClick={() => setMode("signup")}
-          >
-            {ar ? "إنشاء حساب جديد" : "Create Account"}
-          </button>
-        </div>
+        {allowSignUp ? (
+          <div className="grid grid-cols-2 rounded-lg bg-muted p-1 text-center text-xs font-semibold">
+            <button
+              type="button"
+              className={`rounded-md py-1.5 transition-colors ${
+                mode === "signin"
+                  ? "bg-background text-foreground shadow-xs"
+                  : "text-muted-foreground"
+              }`}
+              onClick={() => setMode("signin")}
+            >
+              {ar ? "تسجيل الدخول" : "Sign In"}
+            </button>
+            <button
+              type="button"
+              className={`rounded-md py-1.5 transition-colors ${
+                mode === "signup"
+                  ? "bg-background text-foreground shadow-xs"
+                  : "text-muted-foreground"
+              }`}
+              onClick={() => setMode("signup")}
+            >
+              {ar ? "إنشاء حساب جديد" : "Create Account"}
+            </button>
+          </div>
+        ) : null}
 
         <div className="space-y-2">
           <Label htmlFor="auth-email">{ar ? "البريد الإلكتروني" : "Email"}</Label>
@@ -190,9 +197,15 @@ export function AuthSignIn({
           {submitting ? (
             <Loader2 className="size-4 animate-spin" />
           ) : mode === "signin" ? (
-            ar ? "دخول" : "Sign in"
+            ar ? (
+              "دخول"
+            ) : (
+              "Sign in"
+            )
+          ) : ar ? (
+            "إنشاء حساب"
           ) : (
-            ar ? "إنشاء حساب" : "Sign up"
+            "Sign up"
           )}
         </Button>
 

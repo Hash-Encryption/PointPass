@@ -26,11 +26,10 @@ export const Route = createFileRoute("/scan")({
 });
 
 type BusinessInfo = {
-  id: string;
-  slug: string;
+  business_id: string;
+  business_slug: string;
   name_ar: string;
   name_en: string;
-  cashier_pin: string;
 };
 
 function CashierTerminal() {
@@ -73,21 +72,15 @@ function CashierTerminal() {
 
     setAuthenticating(true);
     try {
-      const { data: biz, error } = await supabase
-        .from("businesses")
-        .select("id, slug, name_ar, name_en, cashier_pin, status")
-        .eq("slug", cleanSlug)
-        .eq("status", "active")
+      const { data, error } = await supabase
+        .rpc("cashier_unlock", { _slug: cleanSlug, _pin: pin })
         .maybeSingle();
+      const biz = data as BusinessInfo | null;
 
       if (error || !biz) {
-        toast.error(ar ? "المطعم/المنشأة غير موجودة" : "Restaurant / Business not found");
-        return;
-      }
-
-      const expectedPin = biz.cashier_pin || "1234";
-      if (pin !== expectedPin) {
-        toast.error(ar ? "رمز PIN غير صحيح لهذا المطعم" : "Incorrect PIN for this restaurant");
+        toast.error(
+          ar ? "اسم المنشأة أو رمز PIN غير صحيح" : "Incorrect business slug or cashier PIN",
+        );
         setPin("");
         return;
       }
@@ -96,9 +89,7 @@ function CashierTerminal() {
       localStorage.setItem("cashier_last_slug", cleanSlug);
       setBusiness(biz as BusinessInfo);
       toast.success(
-        ar
-          ? `تم فتح الشاشة لـ ${biz.name_ar}`
-          : `Terminal unlocked for ${biz.name_en}`,
+        ar ? `تم فتح الشاشة لـ ${biz.name_ar}` : `Terminal unlocked for ${biz.name_en}`,
       );
     } catch {
       toast.error(ar ? "خطأ في الاتصال بالخادم" : "Connection error");
@@ -146,25 +137,36 @@ function CashierTerminal() {
     }
     if (!business) return;
 
-    await supabase
-      .from("pass_transactions")
-      .insert({
-        pass_serial: serial,
-        action,
-        business_id: business.id,
-        amount_sar: action === "points" ? Number(amount || 0) : null,
-      })
-      .then(() => undefined, () => undefined);
+    const amountSar = Number(amount);
+    if (action === "points" && (!Number.isFinite(amountSar) || amountSar <= 0)) {
+      toast.error(ar ? "أدخل مبلغاً صحيحاً أكبر من صفر" : "Enter a valid amount above zero");
+      return;
+    }
+
+    const actionInput = {
+      slug: business.business_slug,
+      pin,
+      serial,
+      action,
+      ...(action === "points" ? { amountSar } : {}),
+    };
 
     const res = await updateWalletPass({
       data: {
-        serial,
-        action,
-        ...(action === "points" ? { amountSar: Number(amount || 0) } : {}),
+        ...actionInput,
       },
     });
-    if (res.ok) toast.success(ar ? "تم تحديث محفظة العميل 🔔" : "Customer wallet updated 🔔");
-    else toast.error(ar ? "فشل التحديث — تحقق من مفتاح API" : "Update failed — check API key");
+    if (res.ok) {
+      toast.success(ar ? "تم تسجيل العملية وتحديث المحفظة" : "Action recorded and wallet updated");
+    } else if (res.recorded) {
+      toast.warning(
+        ar
+          ? "تم تسجيل العملية، لكن مزامنة المحفظة غير متاحة"
+          : "Action recorded, but wallet sync is unavailable",
+      );
+    } else {
+      toast.error(res.error ?? (ar ? "تعذر تسجيل العملية" : "Could not record action"));
+    }
     if (action === "points") setAmount("");
   }
 
@@ -172,10 +174,15 @@ function CashierTerminal() {
   if (!business) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-surface-dark px-4">
-        <form onSubmit={unlockTerminal} className="w-full max-w-sm space-y-5 rounded-2xl border border-white/10 bg-white/5 p-6 text-center text-surface-dark-foreground shadow-2xl">
+        <form
+          onSubmit={unlockTerminal}
+          className="w-full max-w-sm space-y-5 rounded-2xl border border-white/10 bg-white/5 p-6 text-center text-surface-dark-foreground shadow-2xl"
+        >
           <div className="space-y-2">
             <Lock className="mx-auto size-10 text-primary" />
-            <h1 className="text-xl font-bold">{ar ? "تسجيل دخول الكاشير" : "Cashier POS Terminal"}</h1>
+            <h1 className="text-xl font-bold">
+              {ar ? "تسجيل دخول الكاشير" : "Cashier POS Terminal"}
+            </h1>
             <p className="text-xs text-muted-foreground">
               {ar ? "أدخل اسم المطعم ورمز PIN لبدء المسح" : "Enter restaurant slug & 4-digit PIN"}
             </p>
@@ -238,15 +245,26 @@ function CashierTerminal() {
             ))}
           </div>
 
-          <Button type="submit" className="w-full h-12 text-base font-bold" disabled={authenticating}>
-            {authenticating ? (
-              ar ? "جاري التحقق..." : "Verifying..."
-            ) : (
-              ar ? "دخول الشاشة" : "Unlock Terminal"
-            )}
+          <Button
+            type="submit"
+            className="w-full h-12 text-base font-bold"
+            disabled={authenticating}
+          >
+            {authenticating
+              ? ar
+                ? "جاري التحقق..."
+                : "Verifying..."
+              : ar
+                ? "دخول الشاشة"
+                : "Unlock Terminal"}
           </Button>
 
-          <Button type="button" variant="ghost" className="text-xs text-surface-dark-foreground opacity-70" onClick={toggle}>
+          <Button
+            type="button"
+            variant="ghost"
+            className="text-xs text-surface-dark-foreground opacity-70"
+            onClick={toggle}
+          >
             {t("language")}
           </Button>
         </form>
@@ -262,7 +280,7 @@ function CashierTerminal() {
           <Store className="size-5 text-primary" />
           <div>
             <h1 className="font-bold text-sm">{ar ? business.name_ar : business.name_en}</h1>
-            <p className="text-[10px] text-muted-foreground dir-ltr">@{business.slug}</p>
+            <p className="text-[10px] text-muted-foreground dir-ltr">@{business.business_slug}</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -288,7 +306,7 @@ function CashierTerminal() {
               {ar ? "جارٍ المسح…" : "Scanning…"}
             </p>
           )}
-          <p className="mt-3 text-center text-xs opacity-70">
+          <p className="mt-3 text-center text-xs opacity-70" aria-live="polite">
             {serial
               ? `${ar ? "البطاقة" : "Pass"}: ${serial}`
               : ar
@@ -309,7 +327,11 @@ function CashierTerminal() {
             onChange={(e) => setAmount(e.target.value)}
             className="h-14 border-white/20 bg-white/10 text-center text-xl text-surface-dark-foreground"
           />
-          <Button className="mt-3 h-14 w-full text-base font-bold" variant="secondary" onClick={() => act("points")}>
+          <Button
+            className="mt-3 h-14 w-full text-base font-bold"
+            variant="secondary"
+            onClick={() => act("points")}
+          >
             <Coins className="me-2 size-5" /> {t("logAmount")}
           </Button>
         </div>

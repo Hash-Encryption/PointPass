@@ -1,4 +1,4 @@
-# Wallet Weaver
+# PointPass
 
 Build a complete multi-tenant Mobile Wallet Loyalty SaaS application in a single codebase with role-based routing, native Arabic RTL support with an English UI toggle, dynamic subdomain routing, custom visual pass previews, and Supabase database integration.
 
@@ -6,7 +6,8 @@ Build a complete multi-tenant Mobile Wallet Loyalty SaaS application in a single
 
 - Copy `.env.example` to `.env.local` for local development.
 - Keep browser-safe Supabase values in `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`.
-- Keep `SUPABASE_SECRET_KEY` and `WALLETWALLET_API_KEY` server-only.
+- Keep `WALLETWALLET_API_KEY` server-only. The Supabase anon key is browser-safe;
+  authorization is enforced by RLS and narrow database functions.
 - Configure the WalletWallet endpoint with `WALLETWALLET_API_URL`; wallet creation and push requests are proxied through server functions.
 
 ---
@@ -103,7 +104,7 @@ Build a complete multi-tenant Mobile Wallet Loyalty SaaS application in a single
 
 - Mobile-optimized sign-up form capturing the customer's phone number.
 
-- On form submission: Calls the Supabase Edge Function to create the pass via WalletWallet API and presents prominent "Add to Apple Wallet" and "Save to Google Wallet" download buttons.
+- On form submission: Calls a server function that records the claim in Supabase, creates the pass through WalletWallet, and presents prominent "Add to Apple Wallet" and "Save to Google Wallet" download buttons.
 
 ---
 
@@ -132,17 +133,45 @@ npm i
 npm run dev
 ```
 
+## Business and role model
+
+- A `super_admin` role is platform-wide and has a null `business_id`.
+- A `merchant` or `cashier` role belongs to one business through `business_id`.
+- A business may be pre-registered with `merchant_email`. If that Auth user exists,
+  it is linked immediately; otherwise the signup trigger links the matching email later.
+- Public claim pages receive only safe branding fields through
+  `get_public_business_by_slug`. Cashier PINs are visible only to authorized
+  merchants and are never returned to public claim or cashier clients.
+- Cashier actions run through `cashier_apply_action`, which validates the active
+  business, PIN, pass ownership, and transaction in one database operation.
+
 ## Supabase setup
 
-For a new project, run `supabase/schema.sql` first and then run every file in
-`supabase/migrations/` in filename order. The business-scoped portal migration
-adds merchant-to-business memberships, tenant-aware RLS, admin business creation,
-business-owned pass analytics, and the `business-assets` Storage bucket.
+The files in `supabase/migrations/` are the only schema authority. Apply them in
+filename order with the Supabase migration runner; do not reset or paste partial
+statements. The base migration is idempotent so it can repair the known partial
+`user_roles` installation without deleting Auth users or existing rows.
 
-Set `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, and `APP_URL` as server-only environment
-variables. The admin portal uses them to invite a new merchant and create the
-business assignment in one action. Never expose the Supabase secret key in a
-`VITE_*` variable or browser bundle.
+Configure `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, and `SUPABASE_URL` in
+Cloudflare Pages. Configure `WALLETWALLET_API_KEY` as a secret and
+`WALLETWALLET_API_URL` as a server variable when wallet issuance is enabled.
 
 Add both the local and deployed `/dashboard` URLs to Supabase Authentication's
-allowed redirect URLs so invited merchants return to the correct dashboard.
+allowed redirect URLs so merchants return to the correct dashboard. Add `/admin`
+for the platform administrator as well.
+
+After the migrations are applied, bootstrap the first administrator only after
+that email exists in `auth.users`. Run this once in the verified project, replacing
+the placeholder email:
+
+```sql
+insert into public.user_roles (user_id, role, business_id)
+select id, 'super_admin', null
+from auth.users
+where lower(email) = lower('ADMIN_EMAIL_HERE')
+on conflict do nothing;
+```
+
+Confirm that exactly one expected Auth user matches before treating `/admin` as
+ready. All later businesses and merchant memberships are created through the
+admin portal.

@@ -136,7 +136,11 @@ function MerchantDashboard() {
       setUser(data.session?.user ?? null);
       setAuthReady(true);
     });
-    if (typeof window !== "undefined" && (window.location.hash.includes("type=recovery") || window.location.hash.includes("type=invite"))) {
+    if (
+      typeof window !== "undefined" &&
+      (window.location.hash.includes("type=recovery") ||
+        window.location.hash.includes("type=invite"))
+    ) {
       setShowResetPassword(true);
     }
     const { data } = supabase.auth.onAuthStateChange((event, session) => {
@@ -169,48 +173,14 @@ function MerchantDashboard() {
 
   const businessesQuery = useQuery({
     queryKey: ["merchant-businesses", user?.id],
-    enabled: Boolean(user),
+    enabled:
+      Boolean(user) && adminRoleQuery.isSuccess && adminRoleQuery.data?.role !== "super_admin",
     queryFn: async () => {
-      const { data: memberships, error: membershipError } = await supabase
-        .from("user_roles")
-        .select("business_id")
-        .eq("user_id", user!.id)
-        .eq("role", "merchant")
-        .not("business_id", "is", null);
-      if (membershipError) throw membershipError;
-
-      let ids = [...new Set((memberships ?? []).map((row) => row.business_id as string))];
-
-      if (ids.length === 0 && user?.email) {
-        // Auto-link pre-registered business by matching merchant_email
-        const { data: preRegistered } = await supabase
-          .from("businesses")
-          .select("id, owner_id")
-          .ilike("merchant_email", user.email);
-
-        if (preRegistered && preRegistered.length > 0) {
-          for (const biz of preRegistered) {
-            if (!biz.owner_id) {
-              await supabase.from("businesses").update({ owner_id: user.id }).eq("id", biz.id);
-            }
-            await supabase.from("user_roles").insert({
-              user_id: user.id,
-              role: "merchant",
-              business_id: biz.id,
-            });
-          }
-          ids = preRegistered.map((b) => b.id);
-        }
-      }
-
-      if (ids.length === 0) return [] as Business[];
-
       const { data, error } = await supabase
         .from("businesses")
         .select(
           "id,slug,name_ar,name_en,logo_url,brand_color,accent_color,program_type,offer_ar,offer_en,target_stamps,sar_per_point,cashier_pin,latitude,longitude,geo_text_ar,geo_text_en",
         )
-        .in("id", ids)
         .eq("status", "active")
         .order("created_at", { ascending: true });
       if (error) throw error;
@@ -434,7 +404,9 @@ function MerchantDashboard() {
         target_stamps: design.targetStamps,
         sar_per_point: design.sarPerPoint,
       },
-      ar ? "تم حفظ تصميم البطاقة والانتقال إلى لوحة التحكم الرئيسية" : "Pass design saved! Switched to main overview.",
+      ar
+        ? "تم حفظ تصميم البطاقة والانتقال إلى لوحة التحكم الرئيسية"
+        : "Pass design saved! Switched to main overview.",
     );
     setActiveTab("overview");
   }
@@ -462,8 +434,21 @@ function MerchantDashboard() {
     if (!business) return;
     setSending(true);
     try {
+      const {
+        data: { session },
+        error: refreshError,
+      } = await supabase.auth.refreshSession();
+
+      if (refreshError || !session) {
+        throw new Error(
+          ar ? "انتهت الجلسة. سجل الدخول مرة أخرى." : "Session expired. Sign in again.",
+        );
+      }
+
       const res = await sendWalletPush({
         data: {
+          accessToken: session.access_token,
+          businessId: business.id,
           slug: business.slug,
           titleAr: design.businessName,
           titleEn: design.businessNameEn,
@@ -477,8 +462,8 @@ function MerchantDashboard() {
         toast.error(
           ar ? "تعذر الإرسال — تحقق من مفتاح WalletWallet" : "Send failed — check WalletWallet key",
         );
-    } catch {
-      toast.error(ar ? "خطأ في الشبكة" : "Network error");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : ar ? "خطأ في الشبكة" : "Network error");
     } finally {
       setSending(false);
     }
@@ -519,7 +504,7 @@ function MerchantDashboard() {
     return <Navigate to="/admin" replace />;
   }
 
-  if (businessesQuery.isError || !business) {
+  if (adminRoleQuery.isError || businessesQuery.isError || !business) {
     return (
       <div className="grid min-h-screen place-items-center bg-background px-4">
         <div className="panel max-w-md p-6 text-center">
@@ -527,12 +512,12 @@ function MerchantDashboard() {
           <h1 className="mt-4 text-xl font-bold">
             {ar ? "لا توجد منشأة مرتبطة" : "No business assigned"}
           </h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            {businessesQuery.isError
-              ? businessesQuery.error.message
-              : ar
+          <p className="mt-2 text-sm text-muted-foreground" role="alert">
+            {adminRoleQuery.error?.message ??
+              businessesQuery.error?.message ??
+              (ar
                 ? "اطلب من المشرف ربط حسابك بمنشأة."
-                : "Ask an administrator to assign your account to a business."}
+                : "Ask an administrator to assign your account to a business.")}
           </p>
           <Button className="mt-5" variant="outline" onClick={() => supabase.auth.signOut()}>
             {ar ? "تسجيل الخروج" : "Sign out"}
@@ -602,11 +587,7 @@ function MerchantDashboard() {
                   "Save Password"
                 )}
               </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setShowResetPassword(false)}
-              >
+              <Button type="button" variant="outline" onClick={() => setShowResetPassword(false)}>
                 {ar ? "إلغاء" : "Cancel"}
               </Button>
             </div>
@@ -671,12 +652,12 @@ function MerchantDashboard() {
                   <Badge variant="outline" className="capitalize">
                     {ar ? PASS_TEMPLATES[program].name.ar : PASS_TEMPLATES[program].name.en}
                   </Badge>
-                  <Badge variant="default">
-                    {ar ? "الحملة نشطة" : "Campaign Active"}
-                  </Badge>
+                  <Badge variant="default">{ar ? "الحملة نشطة" : "Campaign Active"}</Badge>
                 </div>
                 <h2 className="text-2xl font-bold">
-                  {ar ? design.businessName || "اسم المنشأة" : design.businessNameEn || "Business Name"}
+                  {ar
+                    ? design.businessName || "اسم المنشأة"
+                    : design.businessNameEn || "Business Name"}
                 </h2>
                 <p className="text-sm text-muted-foreground">
                   {ar
@@ -761,7 +742,9 @@ function MerchantDashboard() {
             {/* Current Pass Live Preview */}
             <div className="panel p-6 space-y-4">
               <div className="flex items-center justify-between">
-                <h3 className="font-bold text-lg">{ar ? "معاينة البطاقة الحالية" : "Current Pass Preview"}</h3>
+                <h3 className="font-bold text-lg">
+                  {ar ? "معاينة البطاقة الحالية" : "Current Pass Preview"}
+                </h3>
                 <Button size="sm" variant="outline" onClick={() => setActiveTab("designer")}>
                   <Edit3 className="me-1.5 size-3.5" />
                   {ar ? "تعديل" : "Edit"}
@@ -1144,7 +1127,9 @@ function MerchantDashboard() {
                 </div>
                 <div className="space-y-1">
                   <h2 className="text-lg font-bold">
-                    {ar ? "هل أنت تأكد من إعادة ضبط الحملة؟" : "Are you sure you want to reset this campaign?"}
+                    {ar
+                      ? "هل أنت تأكد من إعادة ضبط الحملة؟"
+                      : "Are you sure you want to reset this campaign?"}
                   </h2>
                   <p className="text-xs text-muted-foreground leading-relaxed">
                     {ar
