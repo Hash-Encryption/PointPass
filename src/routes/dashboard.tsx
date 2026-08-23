@@ -75,7 +75,7 @@ type Business = {
   offer_en: string | null;
   target_stamps: number | null;
   sar_per_point: number | null;
-  cashier_pin: string | null;
+  points_per_reward: number;
   latitude: number | null;
   longitude: number | null;
   geo_text_ar: string | null;
@@ -110,6 +110,7 @@ function MerchantDashboard() {
     program: "stamp",
     targetStamps: 9,
     sarPerPoint: 10,
+    pointsPerReward: 100,
     progress: 0,
   });
 
@@ -179,7 +180,7 @@ function MerchantDashboard() {
       const { data, error } = await supabase
         .from("businesses")
         .select(
-          "id,slug,name_ar,name_en,logo_url,brand_color,accent_color,program_type,offer_ar,offer_en,target_stamps,sar_per_point,cashier_pin,latitude,longitude,geo_text_ar,geo_text_en",
+          "id,slug,name_ar,name_en,logo_url,brand_color,accent_color,program_type,offer_ar,offer_en,target_stamps,sar_per_point,points_per_reward,latitude,longitude,geo_text_ar,geo_text_en",
         )
         .eq("status", "active")
         .order("created_at", { ascending: true });
@@ -208,9 +209,10 @@ function MerchantDashboard() {
       program: business.program_type,
       targetStamps: business.target_stamps ?? 9,
       sarPerPoint: business.sar_per_point ?? 10,
+      pointsPerReward: business.points_per_reward,
       progress: 0,
     });
-    setPin(business.cashier_pin ?? "");
+    setPin("");
     setLat(business.latitude === null ? "" : String(business.latitude));
     setLng(business.longitude === null ? "" : String(business.longitude));
     setGeoAr(business.geo_text_ar ?? "");
@@ -314,6 +316,7 @@ function MerchantDashboard() {
       headlineEn: template.program.reward.en,
       targetStamps: template.program.targetStamps ?? d.targetStamps,
       sarPerPoint: template.program.sarPerPoint ?? d.sarPerPoint,
+      pointsPerReward: template.program.pointsPerReward ?? d.pointsPerReward,
     }));
   }
 
@@ -326,16 +329,17 @@ function MerchantDashboard() {
   }
 
   async function updateBusiness(values: Record<string, unknown>, successMessage: string) {
-    if (!business) return;
+    if (!business) return false;
     setSaving(true);
     const { error } = await supabase.from("businesses").update(values).eq("id", business.id);
     setSaving(false);
     if (error) {
       toast.error(error.message);
-      return;
+      return false;
     }
     await businessesQuery.refetch();
     toast.success(successMessage);
+    return true;
   }
 
   const joinUrl = useMemo(() => {
@@ -378,6 +382,15 @@ function MerchantDashboard() {
 
   async function saveDesign() {
     if (!business) return;
+    if (
+      program === "points" &&
+      (!Number.isInteger(design.pointsPerReward) || design.pointsPerReward <= 0)
+    ) {
+      toast.error(
+        ar ? "أدخل حداً صحيحاً موجباً للمكافأة" : "Enter a positive whole-number reward threshold",
+      );
+      return;
+    }
     let logoUrl = business.logo_url;
     if (logoFile) {
       const extension = logoFile.name.split(".").pop()?.toLowerCase() || "png";
@@ -403,6 +416,7 @@ function MerchantDashboard() {
         offer_en: design.headlineEn,
         target_stamps: design.targetStamps,
         sar_per_point: design.sarPerPoint,
+        points_per_reward: design.pointsPerReward,
       },
       ar
         ? "تم حفظ تصميم البطاقة والانتقال إلى لوحة التحكم الرئيسية"
@@ -779,8 +793,8 @@ function MerchantDashboard() {
                 {program === "coupon_morph" ? (
                   <p className="mt-2 text-xs text-muted-foreground">
                     {ar
-                      ? "تبدأ كقسيمة خصم ثم تتحول تلقائياً إلى بطاقة ولاء دائمة بعد أول مسح."
-                      : "Starts as a discount voucher and morphs into a permanent loyalty card on first scan."}
+                      ? "تُستهلك قسيمة الخصم عند أول استبدال ناجح، ثم تصبح بطاقة أختام دائمة."
+                      : "The introductory coupon is consumed on its first valid redemption, then becomes a permanent stamp card."}
                   </p>
                 ) : null}
               </div>
@@ -864,19 +878,36 @@ function MerchantDashboard() {
               </div>
 
               {program === "points" ? (
-                <div>
-                  <Label>
-                    {ar
-                      ? `ريال لكل نقطة: ${design.sarPerPoint}`
-                      : `SAR per point: ${design.sarPerPoint}`}
-                  </Label>
-                  <Slider
-                    min={1}
-                    max={50}
-                    step={1}
-                    value={[design.sarPerPoint]}
-                    onValueChange={([v]) => setDesign({ ...design, sarPerPoint: v ?? 10 })}
-                  />
+                <div className="space-y-4">
+                  <div>
+                    <Label>
+                      {ar
+                        ? `ريال لكل نقطة: ${design.sarPerPoint}`
+                        : `SAR per point: ${design.sarPerPoint}`}
+                    </Label>
+                    <Slider
+                      min={1}
+                      max={50}
+                      step={1}
+                      value={[design.sarPerPoint]}
+                      onValueChange={([v]) => setDesign({ ...design, sarPerPoint: v ?? 10 })}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="pointsPerReward">
+                      {ar ? "النقاط المطلوبة للمكافأة" : "Points required per reward"}
+                    </Label>
+                    <Input
+                      id="pointsPerReward"
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={design.pointsPerReward}
+                      onChange={(e) =>
+                        setDesign({ ...design, pointsPerReward: Number(e.target.value) })
+                      }
+                    />
+                  </div>
                 </div>
               ) : (
                 <div>
@@ -926,12 +957,15 @@ function MerchantDashboard() {
             />
             <Button
               disabled={pin.length !== 4 || saving}
-              onClick={() =>
-                updateBusiness(
-                  { cashier_pin: pin },
-                  ar ? "تم تحديث رمز الكاشير" : "Cashier PIN updated",
+              onClick={async () => {
+                if (
+                  await updateBusiness(
+                    { cashier_pin: pin },
+                    ar ? "تم تحديث رمز الكاشير" : "Cashier PIN updated",
+                  )
                 )
-              }
+                  setPin("");
+              }}
             >
               {t("save")}
             </Button>

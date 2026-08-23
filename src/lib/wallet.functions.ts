@@ -16,15 +16,27 @@ async function walletFetch(method: "POST" | "PUT", path: string, body: unknown) 
       data: null,
     };
   }
-  const res = await fetch(`${apiUrl.replace(/\/$/, "")}${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-  const text = await res.text();
+  let res: Response;
+  let text: string;
+  try {
+    res = await fetch(`${apiUrl.replace(/\/$/, "")}${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    text = await res.text();
+  } catch {
+    console.error(`WalletWallet ${path} failed [network]`);
+    return {
+      ok: false as const,
+      status: 502,
+      error: "WalletWallet request failed (network)",
+      data: null,
+    };
+  }
   if (!res.ok) {
     console.error(`WalletWallet ${path} failed [${res.status}]`);
     return {
@@ -122,10 +134,10 @@ export const createWalletPass = createServerFn({ method: "POST" })
 
 const updatePassSchema = z.object({
   slug: z.string().min(1).max(64),
-  pin: z.string().regex(/^[0-9]{4}$/),
+  cashierSession: z.string().regex(/^[a-f0-9]{64}$/),
   serial: z.string().min(1).max(128),
   action: z.enum(["stamp", "points", "redeem"]),
-  amountSar: z.number().min(0).max(100000).optional(),
+  amountSar: z.number().finite().positive().max(100000).optional(),
 });
 
 export const updateWalletPass = createServerFn({ method: "POST" })
@@ -135,7 +147,7 @@ export const updateWalletPass = createServerFn({ method: "POST" })
     const { data: actionData, error: actionError } = await supabase
       .rpc("cashier_apply_action", {
         _slug: data.slug,
-        _pin: data.pin,
+        _session_token: data.cashierSession,
         _serial: data.serial,
         _action: data.action,
         _amount_sar: data.amountSar ?? null,
@@ -143,7 +155,15 @@ export const updateWalletPass = createServerFn({ method: "POST" })
       .single();
 
     if (actionError) {
-      return { ok: false as const, recorded: false as const, error: actionError.message };
+      const sessionExpired = actionError.message === "Cashier session invalid or expired";
+      return {
+        ok: false as const,
+        recorded: false as const,
+        sessionExpired,
+        error: sessionExpired
+          ? "Cashier session expired. Unlock the terminal again."
+          : actionError.message,
+      };
     }
 
     const state = actionData as {

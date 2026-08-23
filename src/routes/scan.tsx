@@ -32,6 +32,11 @@ type BusinessInfo = {
   name_en: string;
 };
 
+type UnlockResult = BusinessInfo & {
+  cashier_session: string;
+  session_expires_at: string;
+};
+
 function CashierTerminal() {
   const { locale, t, toggle } = useLocale();
   const ar = locale === "ar";
@@ -46,6 +51,7 @@ function CashierTerminal() {
   const [pin, setPin] = useState("");
   const [authenticating, setAuthenticating] = useState(false);
   const [business, setBusiness] = useState<BusinessInfo | null>(null);
+  const [cashierSession, setCashierSession] = useState<string | null>(null);
   const [serial, setSerial] = useState<string | null>(null);
   const [amount, setAmount] = useState("");
   const [scanning, setScanning] = useState(false);
@@ -75,7 +81,7 @@ function CashierTerminal() {
       const { data, error } = await supabase
         .rpc("cashier_unlock", { _slug: cleanSlug, _pin: pin })
         .maybeSingle();
-      const biz = data as BusinessInfo | null;
+      const biz = data as UnlockResult | null;
 
       if (error || !biz) {
         toast.error(
@@ -87,7 +93,14 @@ function CashierTerminal() {
 
       // Success: Save slug for quick future logins on this device
       localStorage.setItem("cashier_last_slug", cleanSlug);
-      setBusiness(biz as BusinessInfo);
+      setBusiness({
+        business_id: biz.business_id,
+        business_slug: biz.business_slug,
+        name_ar: biz.name_ar,
+        name_en: biz.name_en,
+      });
+      setCashierSession(biz.cashier_session);
+      setPin("");
       toast.success(
         ar ? `تم فتح الشاشة لـ ${biz.name_ar}` : `Terminal unlocked for ${biz.name_en}`,
       );
@@ -98,13 +111,14 @@ function CashierTerminal() {
     }
   }
 
-  function lockTerminal() {
+  function lockTerminal(showToast = true) {
     setBusiness(null);
+    setCashierSession(null);
     setPin("");
     setSerial(null);
     scannerRef.current?.stop().catch(() => {});
     setScanning(false);
-    toast.info(ar ? "تم إغلاق الشاشة" : "Terminal locked");
+    if (showToast) toast.info(ar ? "تم إغلاق الشاشة" : "Terminal locked");
   }
 
   async function startScan() {
@@ -135,7 +149,13 @@ function CashierTerminal() {
       toast.error(ar ? "امسح بطاقة أولاً" : "Scan a pass first");
       return;
     }
-    if (!business) return;
+    if (!business || !cashierSession) {
+      toast.error(
+        ar ? "انتهت جلسة الكاشير. افتح الشاشة مجدداً" : "Cashier session expired. Unlock again",
+      );
+      lockTerminal(false);
+      return;
+    }
 
     const amountSar = Number(amount);
     if (action === "points" && (!Number.isFinite(amountSar) || amountSar <= 0)) {
@@ -145,7 +165,7 @@ function CashierTerminal() {
 
     const actionInput = {
       slug: business.business_slug,
-      pin,
+      cashierSession,
       serial,
       action,
       ...(action === "points" ? { amountSar } : {}),
@@ -164,6 +184,11 @@ function CashierTerminal() {
           ? "تم تسجيل العملية، لكن مزامنة المحفظة غير متاحة"
           : "Action recorded, but wallet sync is unavailable",
       );
+    } else if (res.sessionExpired) {
+      toast.error(
+        ar ? "انتهت جلسة الكاشير. افتح الشاشة مجدداً" : "Cashier session expired. Unlock again",
+      );
+      lockTerminal(false);
     } else {
       toast.error(res.error ?? (ar ? "تعذر تسجيل العملية" : "Could not record action"));
     }
@@ -287,7 +312,7 @@ function CashierTerminal() {
           <Button size="sm" variant="outline" onClick={toggle}>
             {t("language")}
           </Button>
-          <Button size="sm" variant="destructive" onClick={lockTerminal}>
+          <Button size="sm" variant="destructive" onClick={() => lockTerminal()}>
             <LogOut className="size-3.5 me-1" />
             {ar ? "خروج" : "Lock"}
           </Button>
