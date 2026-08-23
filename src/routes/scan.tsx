@@ -30,6 +30,10 @@ type BusinessInfo = {
   business_slug: string;
   name_ar: string;
   name_en: string;
+  branch_name_ar: string | undefined;
+  branch_name_en: string | undefined;
+  staff_name_ar: string | undefined;
+  staff_name_en: string | undefined;
 };
 
 type UnlockResult = BusinessInfo & {
@@ -49,6 +53,15 @@ function CashierTerminal() {
   });
 
   const [pin, setPin] = useState("");
+  const [branchCode, setBranchCode] = useState(() =>
+    typeof window === "undefined" ? "" : (localStorage.getItem("cashier_last_branch") ?? ""),
+  );
+  const [staffCode, setStaffCode] = useState(() =>
+    typeof window === "undefined" ? "" : (localStorage.getItem("cashier_last_staff") ?? ""),
+  );
+  const [deviceName, setDeviceName] = useState(() =>
+    typeof window === "undefined" ? "" : (localStorage.getItem("cashier_device_name") ?? ""),
+  );
   const [authenticating, setAuthenticating] = useState(false);
   const [business, setBusiness] = useState<BusinessInfo | null>(null);
   const [cashierSession, setCashierSession] = useState<string | null>(null);
@@ -75,12 +88,24 @@ function CashierTerminal() {
       toast.error(ar ? "أدخل رمز PIN المكون من 4 أرقام" : "Enter 4-digit PIN");
       return;
     }
+    if (Boolean(branchCode) !== Boolean(staffCode)) {
+      toast.error(ar ? "أدخل رمز الفرع ورمز الموظف معاً" : "Enter both branch code and staff code");
+      return;
+    }
 
     setAuthenticating(true);
     try {
-      const { data, error } = await supabase
-        .rpc("cashier_unlock", { _slug: cleanSlug, _pin: pin })
-        .maybeSingle();
+      const { data, error } = branchCode
+        ? await supabase
+            .rpc("cashier_unlock_staff", {
+              _slug: cleanSlug,
+              _branch_code: branchCode,
+              _staff_code: staffCode,
+              _pin: pin,
+              _device_name: deviceName || null,
+            })
+            .maybeSingle()
+        : await supabase.rpc("cashier_unlock", { _slug: cleanSlug, _pin: pin }).maybeSingle();
       const biz = data as UnlockResult | null;
 
       if (error || !biz) {
@@ -93,11 +118,20 @@ function CashierTerminal() {
 
       // Success: Save slug for quick future logins on this device
       localStorage.setItem("cashier_last_slug", cleanSlug);
+      if (branchCode) {
+        localStorage.setItem("cashier_last_branch", branchCode);
+        localStorage.setItem("cashier_last_staff", staffCode);
+        localStorage.setItem("cashier_device_name", deviceName);
+      }
       setBusiness({
         business_id: biz.business_id,
         business_slug: biz.business_slug,
         name_ar: biz.name_ar,
         name_en: biz.name_en,
+        branch_name_ar: biz.branch_name_ar,
+        branch_name_en: biz.branch_name_en,
+        staff_name_ar: biz.staff_name_ar,
+        staff_name_en: biz.staff_name_en,
       });
       setCashierSession(biz.cashier_session);
       setPin("");
@@ -209,7 +243,9 @@ function CashierTerminal() {
               {ar ? "تسجيل دخول الكاشير" : "Cashier POS Terminal"}
             </h1>
             <p className="text-xs text-muted-foreground">
-              {ar ? "أدخل اسم المطعم ورمز PIN لبدء المسح" : "Enter restaurant slug & 4-digit PIN"}
+              {ar
+                ? "أدخل المنشأة ورمز PIN. أضف الفرع والموظف للجلسات المعرّفة."
+                : "Enter the business and PIN. Add branch and staff for identified sessions."}
             </p>
           </div>
 
@@ -230,6 +266,51 @@ function CashierTerminal() {
                   className="ps-9 border-white/20 bg-white/10 text-surface-dark-foreground"
                 />
               </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <Label htmlFor="branch-code" className="text-xs text-muted-foreground">
+                  {ar ? "رمز الفرع" : "Branch code"}
+                </Label>
+                <Input
+                  id="branch-code"
+                  value={branchCode}
+                  onChange={(e) =>
+                    setBranchCode(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))
+                  }
+                  dir="ltr"
+                  className="mt-1 border-white/20 bg-white/10 text-surface-dark-foreground"
+                />
+              </div>
+              <div>
+                <Label htmlFor="staff-code" className="text-xs text-muted-foreground">
+                  {ar ? "رمز الموظف" : "Staff code"}
+                </Label>
+                <Input
+                  id="staff-code"
+                  value={staffCode}
+                  onChange={(e) =>
+                    setStaffCode(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))
+                  }
+                  dir="ltr"
+                  className="mt-1 border-white/20 bg-white/10 text-surface-dark-foreground"
+                />
+              </div>
+            </div>
+
+            <div>
+              <Label htmlFor="device-name" className="text-xs text-muted-foreground">
+                {ar ? "اسم الجهاز (اختياري)" : "Device name (optional)"}
+              </Label>
+              <Input
+                id="device-name"
+                maxLength={120}
+                value={deviceName}
+                onChange={(e) => setDeviceName(e.target.value)}
+                placeholder={ar ? "كاشير ١" : "Register 1"}
+                className="mt-1 border-white/20 bg-white/10 text-surface-dark-foreground"
+              />
             </div>
 
             <div>
@@ -306,6 +387,12 @@ function CashierTerminal() {
           <div>
             <h1 className="font-bold text-sm">{ar ? business.name_ar : business.name_en}</h1>
             <p className="text-[10px] text-muted-foreground dir-ltr">@{business.business_slug}</p>
+            {business.staff_name_en ? (
+              <p className="text-[10px] text-muted-foreground">
+                {ar ? business.staff_name_ar : business.staff_name_en} ·{" "}
+                {ar ? business.branch_name_ar : business.branch_name_en}
+              </p>
+            ) : null}
           </div>
         </div>
         <div className="flex items-center gap-2">

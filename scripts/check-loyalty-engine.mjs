@@ -9,6 +9,10 @@ const phase2 = readFileSync(
   new URL("../supabase/migrations/20260822010000_loyalty_engine.sql", import.meta.url),
   "utf8",
 );
+const phase7 = readFileSync(
+  new URL("../supabase/migrations/20260823010000_business_operations.sql", import.meta.url),
+  "utf8",
+);
 
 assert.ok(
   existsSync(
@@ -140,4 +144,14 @@ for (const value of [
   "_next_morphed",
 ]) {
   assert.ok(phase2.slice(transaction).includes(value), `Missing transaction value: ${value}`);
+}
+
+for (const preserved of [
+  "_stamp_delta := -_business.target_stamps",
+  "_points_delta := -_business.points_per_reward",
+  "_morph_applied := true",
+  "Loyalty operation would create a negative balance",
+  "insert into public.pass_transactions",
+]) {
+  assert.ok(phase7.includes(preserved), `Phase 7 must preserve loyalty contract: ${preserved}`);
 }

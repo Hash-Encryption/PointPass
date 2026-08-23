@@ -5,6 +5,7 @@ import type { User } from "@supabase/supabase-js";
 import { toast } from "sonner";
 import { PortalNav } from "@/components/PortalNav";
 import { AuthSignIn } from "@/components/AuthSignIn";
+import { OperationsPanel } from "@/components/OperationsPanel";
 import { PassPreview, type PassDesign } from "@/components/PassPreview";
 import { useLocale } from "@/lib/i18n";
 import { supabase } from "@/lib/supabase";
@@ -652,6 +653,7 @@ function MerchantDashboard() {
               {t("passDesigner")}
             </TabsTrigger>
             <TabsTrigger value="pin">{t("pinManager")}</TabsTrigger>
+            <TabsTrigger value="operations">{ar ? "العمليات والفروع" : "Operations"}</TabsTrigger>
             <TabsTrigger value="geo">{t("geofence")}</TabsTrigger>
             <TabsTrigger value="push">{t("campaigns")}</TabsTrigger>
             <TabsTrigger value="analytics">{t("analytics")}</TabsTrigger>
@@ -974,6 +976,10 @@ function MerchantDashboard() {
                 ? "يستخدم موظفو الفرع هذا الرمز لفتح شاشة الماسح /scan"
                 : "Store staff use this PIN to unlock the /scan terminal"}
             </p>
+          </TabsContent>
+
+          <TabsContent value="operations" className="mt-4">
+            <OperationsPanel businessId={business.id} ar={ar} />
           </TabsContent>
 
           {/* Geofence */}
