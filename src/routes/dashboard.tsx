@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { PortalNav } from "@/components/PortalNav";
 import { AuthSignIn } from "@/components/AuthSignIn";
 import { OperationsPanel } from "@/components/OperationsPanel";
+import { AnalyticsPanel } from "@/components/AnalyticsPanel";
 import { PassPreview, type PassDesign } from "@/components/PassPreview";
 import { useLocale } from "@/lib/i18n";
 import { supabase } from "@/lib/supabase";
@@ -32,17 +33,6 @@ import {
   ShieldAlert,
   Trash2,
 } from "lucide-react";
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
 
 export const Route = createFileRoute("/dashboard")({
   head: () => ({
@@ -82,9 +72,6 @@ type Business = {
   geo_text_ar: string | null;
   geo_text_en: string | null;
 };
-
-type PassRow = { id: string; created_at: string; last_visit_at: string | null };
-type TransactionRow = { action: string; created_at: string };
 
 function MerchantDashboard() {
   const { locale, t } = useLocale();
@@ -221,29 +208,6 @@ function MerchantDashboard() {
     setLogoFile(null);
   }, [business, businessId]);
 
-  const analyticsQuery = useQuery({
-    queryKey: ["merchant-analytics", business?.id],
-    enabled: Boolean(business),
-    queryFn: async () => {
-      const [passesResult, transactionsResult] = await Promise.all([
-        supabase
-          .from("pass_instances")
-          .select("id,created_at,last_visit_at")
-          .eq("business_id", business!.id),
-        supabase
-          .from("pass_transactions")
-          .select("action,created_at")
-          .eq("business_id", business!.id),
-      ]);
-      if (passesResult.error) throw passesResult.error;
-      if (transactionsResult.error) throw transactionsResult.error;
-      return {
-        passes: passesResult.data as PassRow[],
-        transactions: transactionsResult.data as TransactionRow[],
-      };
-    },
-  });
-
   const automationQuery = useQuery({
     queryKey: ["business-automations", business?.id],
     enabled: Boolean(business),
@@ -268,43 +232,6 @@ function MerchantDashboard() {
   }, [automationQuery.data]);
 
   const fg = useMemo(() => autoContrast(design.background), [design.background]);
-  const analytics = useMemo(() => {
-    const passes = analyticsQuery.data?.passes ?? [];
-    const transactions = analyticsQuery.data?.transactions ?? [];
-    const days = Array.from({ length: 7 }, (_, index) => {
-      const date = new Date();
-      date.setHours(0, 0, 0, 0);
-      date.setDate(date.getDate() - (6 - index));
-      const key = date.toISOString().slice(0, 10);
-      return {
-        key,
-        d: new Intl.DateTimeFormat(locale === "ar" ? "ar-SA" : "en", { weekday: "short" }).format(
-          date,
-        ),
-        installs: passes.filter((item) => item.created_at.slice(0, 10) === key).length,
-        redemptions: transactions.filter(
-          (item) => item.action === "redeem" && item.created_at.slice(0, 10) === key,
-        ).length,
-      };
-    });
-    const hours = [0, 4, 8, 12, 16, 20].map((hour) => ({
-      h: `${String(hour).padStart(2, "0")}:00`,
-      v: transactions.filter((item) => {
-        const transactionHour = new Date(item.created_at).getHours();
-        return transactionHour >= hour && transactionHour < hour + 4;
-      }).length,
-    }));
-    return {
-      days,
-      hours,
-      installs: passes.length,
-      redemptions: transactions.filter((item) => item.action === "redeem").length,
-      retention: passes.length
-        ? Math.round((passes.filter((item) => item.last_visit_at).length / passes.length) * 100)
-        : 0,
-    };
-  }, [analyticsQuery.data, locale]);
-
   function applyProgram(next: ProgramType) {
     setProgram(next);
     const template = PASS_TEMPLATES[next];
@@ -1102,58 +1029,8 @@ function MerchantDashboard() {
           </TabsContent>
 
           {/* Analytics */}
-          <TabsContent value="analytics" className="mt-4 grid gap-6 lg:grid-cols-2">
-            <div className="panel p-6">
-              <h2 className="mb-4 text-lg font-semibold">
-                {ar ? "التثبيت مقابل الاستبدال" : "Installs vs redemptions"}
-              </h2>
-              <ResponsiveContainer width="100%" height={260}>
-                <LineChart data={analytics.days}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                  <XAxis dataKey="d" stroke="var(--muted-foreground)" fontSize={12} />
-                  <YAxis stroke="var(--muted-foreground)" fontSize={12} />
-                  <Tooltip />
-                  <Line
-                    type="monotone"
-                    dataKey="installs"
-                    stroke="var(--primary)"
-                    strokeWidth={2}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="redemptions"
-                    stroke="var(--accent)"
-                    strokeWidth={2}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="panel p-6">
-              <h2 className="mb-4 text-lg font-semibold">
-                {ar ? "ساعات الذروة" : "Peak visit hours"}
-              </h2>
-              <ResponsiveContainer width="100%" height={260}>
-                <BarChart data={analytics.hours}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                  <XAxis dataKey="h" stroke="var(--muted-foreground)" fontSize={12} />
-                  <YAxis stroke="var(--muted-foreground)" fontSize={12} />
-                  <Tooltip />
-                  <Bar dataKey="v" fill="var(--accent)" radius={6} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-3 lg:col-span-2">
-              {[
-                [t("installs"), String(analytics.installs)],
-                [t("redemptions"), String(analytics.redemptions)],
-                [t("retention"), `${analytics.retention}%`],
-              ].map(([label, value]) => (
-                <div key={label} className="panel p-5">
-                  <p className="text-sm text-muted-foreground">{label}</p>
-                  <p className="mt-1 text-3xl font-extrabold">{value}</p>
-                </div>
-              ))}
-            </div>
+          <TabsContent value="analytics" className="mt-4">
+            <AnalyticsPanel key={business.id} businessId={business.id} ar={ar} />
           </TabsContent>
         </Tabs>
 
