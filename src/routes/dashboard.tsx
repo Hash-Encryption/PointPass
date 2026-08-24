@@ -5,6 +5,8 @@ import type { User } from "@supabase/supabase-js";
 import { toast } from "sonner";
 import { PortalNav } from "@/components/PortalNav";
 import { AuthSignIn } from "@/components/AuthSignIn";
+import { OperationsPanel } from "@/components/OperationsPanel";
+import { AnalyticsPanel } from "@/components/AnalyticsPanel";
 import { PassPreview, type PassDesign } from "@/components/PassPreview";
 import { useLocale } from "@/lib/i18n";
 import { supabase } from "@/lib/supabase";
@@ -31,17 +33,6 @@ import {
   ShieldAlert,
   Trash2,
 } from "lucide-react";
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
 
 export const Route = createFileRoute("/dashboard")({
   head: () => ({
@@ -75,15 +66,12 @@ type Business = {
   offer_en: string | null;
   target_stamps: number | null;
   sar_per_point: number | null;
-  cashier_pin: string | null;
+  points_per_reward: number;
   latitude: number | null;
   longitude: number | null;
   geo_text_ar: string | null;
   geo_text_en: string | null;
 };
-
-type PassRow = { id: string; created_at: string; last_visit_at: string | null };
-type TransactionRow = { action: string; created_at: string };
 
 function MerchantDashboard() {
   const { locale, t } = useLocale();
@@ -110,6 +98,7 @@ function MerchantDashboard() {
     program: "stamp",
     targetStamps: 9,
     sarPerPoint: 10,
+    pointsPerReward: 100,
     progress: 0,
   });
 
@@ -179,7 +168,7 @@ function MerchantDashboard() {
       const { data, error } = await supabase
         .from("businesses")
         .select(
-          "id,slug,name_ar,name_en,logo_url,brand_color,accent_color,program_type,offer_ar,offer_en,target_stamps,sar_per_point,cashier_pin,latitude,longitude,geo_text_ar,geo_text_en",
+          "id,slug,name_ar,name_en,logo_url,brand_color,accent_color,program_type,offer_ar,offer_en,target_stamps,sar_per_point,points_per_reward,latitude,longitude,geo_text_ar,geo_text_en",
         )
         .eq("status", "active")
         .order("created_at", { ascending: true });
@@ -208,38 +197,16 @@ function MerchantDashboard() {
       program: business.program_type,
       targetStamps: business.target_stamps ?? 9,
       sarPerPoint: business.sar_per_point ?? 10,
+      pointsPerReward: business.points_per_reward,
       progress: 0,
     });
-    setPin(business.cashier_pin ?? "");
+    setPin("");
     setLat(business.latitude === null ? "" : String(business.latitude));
     setLng(business.longitude === null ? "" : String(business.longitude));
     setGeoAr(business.geo_text_ar ?? "");
     setGeoEn(business.geo_text_en ?? "");
     setLogoFile(null);
   }, [business, businessId]);
-
-  const analyticsQuery = useQuery({
-    queryKey: ["merchant-analytics", business?.id],
-    enabled: Boolean(business),
-    queryFn: async () => {
-      const [passesResult, transactionsResult] = await Promise.all([
-        supabase
-          .from("pass_instances")
-          .select("id,created_at,last_visit_at")
-          .eq("business_id", business!.id),
-        supabase
-          .from("pass_transactions")
-          .select("action,created_at")
-          .eq("business_id", business!.id),
-      ]);
-      if (passesResult.error) throw passesResult.error;
-      if (transactionsResult.error) throw transactionsResult.error;
-      return {
-        passes: passesResult.data as PassRow[],
-        transactions: transactionsResult.data as TransactionRow[],
-      };
-    },
-  });
 
   const automationQuery = useQuery({
     queryKey: ["business-automations", business?.id],
@@ -265,43 +232,6 @@ function MerchantDashboard() {
   }, [automationQuery.data]);
 
   const fg = useMemo(() => autoContrast(design.background), [design.background]);
-  const analytics = useMemo(() => {
-    const passes = analyticsQuery.data?.passes ?? [];
-    const transactions = analyticsQuery.data?.transactions ?? [];
-    const days = Array.from({ length: 7 }, (_, index) => {
-      const date = new Date();
-      date.setHours(0, 0, 0, 0);
-      date.setDate(date.getDate() - (6 - index));
-      const key = date.toISOString().slice(0, 10);
-      return {
-        key,
-        d: new Intl.DateTimeFormat(locale === "ar" ? "ar-SA" : "en", { weekday: "short" }).format(
-          date,
-        ),
-        installs: passes.filter((item) => item.created_at.slice(0, 10) === key).length,
-        redemptions: transactions.filter(
-          (item) => item.action === "redeem" && item.created_at.slice(0, 10) === key,
-        ).length,
-      };
-    });
-    const hours = [0, 4, 8, 12, 16, 20].map((hour) => ({
-      h: `${String(hour).padStart(2, "0")}:00`,
-      v: transactions.filter((item) => {
-        const transactionHour = new Date(item.created_at).getHours();
-        return transactionHour >= hour && transactionHour < hour + 4;
-      }).length,
-    }));
-    return {
-      days,
-      hours,
-      installs: passes.length,
-      redemptions: transactions.filter((item) => item.action === "redeem").length,
-      retention: passes.length
-        ? Math.round((passes.filter((item) => item.last_visit_at).length / passes.length) * 100)
-        : 0,
-    };
-  }, [analyticsQuery.data, locale]);
-
   function applyProgram(next: ProgramType) {
     setProgram(next);
     const template = PASS_TEMPLATES[next];
@@ -314,6 +244,7 @@ function MerchantDashboard() {
       headlineEn: template.program.reward.en,
       targetStamps: template.program.targetStamps ?? d.targetStamps,
       sarPerPoint: template.program.sarPerPoint ?? d.sarPerPoint,
+      pointsPerReward: template.program.pointsPerReward ?? d.pointsPerReward,
     }));
   }
 
@@ -326,16 +257,17 @@ function MerchantDashboard() {
   }
 
   async function updateBusiness(values: Record<string, unknown>, successMessage: string) {
-    if (!business) return;
+    if (!business) return false;
     setSaving(true);
     const { error } = await supabase.from("businesses").update(values).eq("id", business.id);
     setSaving(false);
     if (error) {
       toast.error(error.message);
-      return;
+      return false;
     }
     await businessesQuery.refetch();
     toast.success(successMessage);
+    return true;
   }
 
   const joinUrl = useMemo(() => {
@@ -378,6 +310,15 @@ function MerchantDashboard() {
 
   async function saveDesign() {
     if (!business) return;
+    if (
+      program === "points" &&
+      (!Number.isInteger(design.pointsPerReward) || design.pointsPerReward <= 0)
+    ) {
+      toast.error(
+        ar ? "أدخل حداً صحيحاً موجباً للمكافأة" : "Enter a positive whole-number reward threshold",
+      );
+      return;
+    }
     let logoUrl = business.logo_url;
     if (logoFile) {
       const extension = logoFile.name.split(".").pop()?.toLowerCase() || "png";
@@ -403,6 +344,7 @@ function MerchantDashboard() {
         offer_en: design.headlineEn,
         target_stamps: design.targetStamps,
         sar_per_point: design.sarPerPoint,
+        points_per_reward: design.pointsPerReward,
       },
       ar
         ? "تم حفظ تصميم البطاقة والانتقال إلى لوحة التحكم الرئيسية"
@@ -638,6 +580,7 @@ function MerchantDashboard() {
               {t("passDesigner")}
             </TabsTrigger>
             <TabsTrigger value="pin">{t("pinManager")}</TabsTrigger>
+            <TabsTrigger value="operations">{ar ? "العمليات والفروع" : "Operations"}</TabsTrigger>
             <TabsTrigger value="geo">{t("geofence")}</TabsTrigger>
             <TabsTrigger value="push">{t("campaigns")}</TabsTrigger>
             <TabsTrigger value="analytics">{t("analytics")}</TabsTrigger>
@@ -779,8 +722,8 @@ function MerchantDashboard() {
                 {program === "coupon_morph" ? (
                   <p className="mt-2 text-xs text-muted-foreground">
                     {ar
-                      ? "تبدأ كقسيمة خصم ثم تتحول تلقائياً إلى بطاقة ولاء دائمة بعد أول مسح."
-                      : "Starts as a discount voucher and morphs into a permanent loyalty card on first scan."}
+                      ? "تُستهلك قسيمة الخصم عند أول استبدال ناجح، ثم تصبح بطاقة أختام دائمة."
+                      : "The introductory coupon is consumed on its first valid redemption, then becomes a permanent stamp card."}
                   </p>
                 ) : null}
               </div>
@@ -864,19 +807,36 @@ function MerchantDashboard() {
               </div>
 
               {program === "points" ? (
-                <div>
-                  <Label>
-                    {ar
-                      ? `ريال لكل نقطة: ${design.sarPerPoint}`
-                      : `SAR per point: ${design.sarPerPoint}`}
-                  </Label>
-                  <Slider
-                    min={1}
-                    max={50}
-                    step={1}
-                    value={[design.sarPerPoint]}
-                    onValueChange={([v]) => setDesign({ ...design, sarPerPoint: v ?? 10 })}
-                  />
+                <div className="space-y-4">
+                  <div>
+                    <Label>
+                      {ar
+                        ? `ريال لكل نقطة: ${design.sarPerPoint}`
+                        : `SAR per point: ${design.sarPerPoint}`}
+                    </Label>
+                    <Slider
+                      min={1}
+                      max={50}
+                      step={1}
+                      value={[design.sarPerPoint]}
+                      onValueChange={([v]) => setDesign({ ...design, sarPerPoint: v ?? 10 })}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="pointsPerReward">
+                      {ar ? "النقاط المطلوبة للمكافأة" : "Points required per reward"}
+                    </Label>
+                    <Input
+                      id="pointsPerReward"
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={design.pointsPerReward}
+                      onChange={(e) =>
+                        setDesign({ ...design, pointsPerReward: Number(e.target.value) })
+                      }
+                    />
+                  </div>
                 </div>
               ) : (
                 <div>
@@ -926,12 +886,15 @@ function MerchantDashboard() {
             />
             <Button
               disabled={pin.length !== 4 || saving}
-              onClick={() =>
-                updateBusiness(
-                  { cashier_pin: pin },
-                  ar ? "تم تحديث رمز الكاشير" : "Cashier PIN updated",
+              onClick={async () => {
+                if (
+                  await updateBusiness(
+                    { cashier_pin: pin },
+                    ar ? "تم تحديث رمز الكاشير" : "Cashier PIN updated",
+                  )
                 )
-              }
+                  setPin("");
+              }}
             >
               {t("save")}
             </Button>
@@ -940,6 +903,10 @@ function MerchantDashboard() {
                 ? "يستخدم موظفو الفرع هذا الرمز لفتح شاشة الماسح /scan"
                 : "Store staff use this PIN to unlock the /scan terminal"}
             </p>
+          </TabsContent>
+
+          <TabsContent value="operations" className="mt-4">
+            <OperationsPanel businessId={business.id} ar={ar} />
           </TabsContent>
 
           {/* Geofence */}
@@ -1062,58 +1029,8 @@ function MerchantDashboard() {
           </TabsContent>
 
           {/* Analytics */}
-          <TabsContent value="analytics" className="mt-4 grid gap-6 lg:grid-cols-2">
-            <div className="panel p-6">
-              <h2 className="mb-4 text-lg font-semibold">
-                {ar ? "التثبيت مقابل الاستبدال" : "Installs vs redemptions"}
-              </h2>
-              <ResponsiveContainer width="100%" height={260}>
-                <LineChart data={analytics.days}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                  <XAxis dataKey="d" stroke="var(--muted-foreground)" fontSize={12} />
-                  <YAxis stroke="var(--muted-foreground)" fontSize={12} />
-                  <Tooltip />
-                  <Line
-                    type="monotone"
-                    dataKey="installs"
-                    stroke="var(--primary)"
-                    strokeWidth={2}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="redemptions"
-                    stroke="var(--accent)"
-                    strokeWidth={2}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="panel p-6">
-              <h2 className="mb-4 text-lg font-semibold">
-                {ar ? "ساعات الذروة" : "Peak visit hours"}
-              </h2>
-              <ResponsiveContainer width="100%" height={260}>
-                <BarChart data={analytics.hours}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                  <XAxis dataKey="h" stroke="var(--muted-foreground)" fontSize={12} />
-                  <YAxis stroke="var(--muted-foreground)" fontSize={12} />
-                  <Tooltip />
-                  <Bar dataKey="v" fill="var(--accent)" radius={6} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-3 lg:col-span-2">
-              {[
-                [t("installs"), String(analytics.installs)],
-                [t("redemptions"), String(analytics.redemptions)],
-                [t("retention"), `${analytics.retention}%`],
-              ].map(([label, value]) => (
-                <div key={label} className="panel p-5">
-                  <p className="text-sm text-muted-foreground">{label}</p>
-                  <p className="mt-1 text-3xl font-extrabold">{value}</p>
-                </div>
-              ))}
-            </div>
+          <TabsContent value="analytics" className="mt-4">
+            <AnalyticsPanel key={business.id} businessId={business.id} ar={ar} />
           </TabsContent>
         </Tabs>
 

@@ -15,6 +15,7 @@ export interface PassDesign {
   program: ProgramType;
   targetStamps: number;
   sarPerPoint: number;
+  pointsPerReward: number;
   progress: number;
 }
 
@@ -32,6 +33,7 @@ export function designFromTemplate(tpl: PassTemplate, program: ProgramType): Pas
     program,
     targetStamps: tpl.program.targetStamps ?? 9,
     sarPerPoint: tpl.program.sarPerPoint ?? 10,
+    pointsPerReward: tpl.program.pointsPerReward ?? 100,
     progress: 4,
   };
 }
@@ -141,10 +143,7 @@ export function PassPreview({ design, locale }: { design: PassDesign; locale: Lo
           <Smartphone className="size-3.5" /> Google Wallet
         </figcaption>
         <div className="rounded-[26px] border border-border bg-card p-3 shadow-[var(--shadow-pass)]">
-          <div
-            className="overflow-hidden rounded-2xl"
-            dir={locale === "ar" ? "rtl" : "ltr"}
-          >
+          <div className="overflow-hidden rounded-2xl" dir={locale === "ar" ? "rtl" : "ltr"}>
             <div className="h-2" style={{ backgroundColor: design.accent }} />
             <div className="p-4" style={{ backgroundColor: design.background }}>
               <PassBody design={design} locale={locale} />
