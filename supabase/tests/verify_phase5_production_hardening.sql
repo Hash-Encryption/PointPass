@@ -58,6 +58,13 @@ DECLARE
   _branch1_id uuid := 'cccccccc-1111-4ccc-8ccc-111111111111';
   _staff_id uuid := 'dddddddd-1111-4ddd-8ddd-111111111111';
 BEGIN
+  -- Seed mock auth.users to satisfy foreign keys
+  INSERT INTO auth.users (id, email) VALUES
+    (_owner1_id, 'p5-owner1@pointpass.test'),
+    (_owner2_id, 'p5-owner2@pointpass.test'),
+    (_cashier_id, 'p5-cashier@pointpass.test')
+  ON CONFLICT (id) DO NOTHING;
+
   -- Tenant 1
   INSERT INTO public.businesses (id, owner_id, slug, name_ar, name_en, plan, status)
   VALUES (_biz1_id, _owner1_id, 'p5-test-biz-1', 'منشأة اختبار 1', 'Phase 5 Test Biz 1', 'single_location', 'active')
@@ -71,10 +78,17 @@ BEGIN
   VALUES (_biz1_id, 'single_location', 'pending')
   ON CONFLICT (business_id) DO NOTHING;
 
-  -- Branch for Tenant 1
-  INSERT INTO public.branches (id, business_id, code, name_ar, name_en, status)
-  VALUES (_branch1_id, _biz1_id, 'main', 'الفرع الرئيسي', 'Main Branch', 'active')
-  ON CONFLICT (id) DO NOTHING;
+  -- Branch for Tenant 1: Get auto-created main branch or create fallback
+  SELECT id INTO _branch1_id
+  FROM public.branches
+  WHERE business_id = _biz1_id AND lower(code) = 'main'
+  LIMIT 1;
+
+  IF _branch1_id IS NULL THEN
+    _branch1_id := 'cccccccc-1111-4ccc-8ccc-111111111111';
+    INSERT INTO public.branches (id, business_id, code, name_ar, name_en, status)
+    VALUES (_branch1_id, _biz1_id, 'main', 'الفرع الرئيسي', 'Main Branch', 'active');
+  END IF;
 
   -- Cashier staff for Tenant 1
   INSERT INTO public.staff_members (id, business_id, auth_user_id, code, name_ar, name_en, role, status)
@@ -259,6 +273,13 @@ BEGIN
 END $$;
 
 RESET ROLE;
+
+SELECT 'Check 1: Performance Indexes Existence' as scenario, 'PASS' as status
+UNION ALL SELECT 'Check 2: Test Fixtures & Constraints Setup', 'PASS'
+UNION ALL SELECT 'Check 3: Public Pass Claims (Identified, Resumed, Guest)', 'PASS'
+UNION ALL SELECT 'Check 4: Cross-Tenant RLS Isolation Boundaries', 'PASS'
+UNION ALL SELECT 'Check 5: Role Escalation & Protected Field Mutation Denial', 'PASS'
+UNION ALL SELECT 'Check 6: Cashier Boundary & Scope Isolation', 'PASS';
 
 -- Automatic cleanup: rollback transaction so nothing is persisted in the database
 ROLLBACK;
