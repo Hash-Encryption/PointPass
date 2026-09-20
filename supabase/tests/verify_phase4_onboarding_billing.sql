@@ -1192,11 +1192,10 @@ BEGIN
     RAISE EXCEPTION 'Scenario 29 FAILED: Provider should be null when not configured';
   END IF;
   RAISE NOTICE '✓ Scenario 29 passed: Provider tests report NOT_APPLICABLE (No payment provider configured)';
+  RAISE NOTICE '==================================================';
+  RAISE NOTICE '✓ ALL 29 PHASE 4 CERTIFICATION SCENARIOS PASSED';
+  RAISE NOTICE '==================================================';
 END;
 $$;
-
-RAISE NOTICE '==================================================';
-RAISE NOTICE '✓ ALL 29 PHASE 4 CERTIFICATION SCENARIOS PASSED';
-RAISE NOTICE '==================================================';
 
 ROLLBACK;
