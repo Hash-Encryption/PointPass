@@ -1,8 +1,107 @@
 -- Phase 2: Locations & Team + Clean Operations UX
 -- Forward-only migration establishing safe PIN status projection, internal code generation,
--- auto-generation in branch upsert, and transactional team member save.
+-- auto-generation in branch upsert, transactional team member save, and anti-recursion RLS architecture.
 
 begin;
+
+-- 0. Anti-recursion RLS helpers & policies (Idempotent foundation)
+-- Centralize permission lookups in small, SECURITY DEFINER functions with search_path = public.
+-- Because these functions bypass RLS during execution, policies invoking them never trigger infinite recursion.
+create or replace function public.user_can_access_branch(_user_id uuid, _branch_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.branches b
+    where b.id = _branch_id
+      and (
+        public.can_manage_business(_user_id, b.business_id)
+        or exists (
+          select 1
+          from public.staff_members s
+          join public.staff_branch_assignments a
+            on a.staff_id = s.id and a.business_id = s.business_id
+          where s.auth_user_id = _user_id
+            and s.business_id = b.business_id
+            and s.status = 'active'
+            and a.branch_id = b.id
+        )
+      )
+  );
+$$;
+
+create or replace function public.user_can_access_staff(_user_id uuid, _target_staff_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.staff_members target
+    where target.id = _target_staff_id
+      and (
+        public.can_manage_business(_user_id, target.business_id)
+        or target.auth_user_id = _user_id
+        or exists (
+          select 1
+          from public.staff_members me
+          join public.staff_branch_assignments my_a
+            on my_a.staff_id = me.id and my_a.business_id = me.business_id
+          join public.staff_branch_assignments target_a
+            on target_a.branch_id = my_a.branch_id and target_a.business_id = me.business_id
+          where me.auth_user_id = _user_id
+            and me.business_id = target.business_id
+            and me.status = 'active'
+            and target_a.staff_id = target.id
+        )
+      )
+  );
+$$;
+
+create or replace function public.user_can_access_branch_assignment(_user_id uuid, _business_id uuid, _branch_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select
+    public.can_manage_business(_user_id, _business_id)
+    or public.user_can_access_branch(_user_id, _branch_id);
+$$;
+
+revoke all on function public.user_can_access_branch(uuid, uuid) from public;
+revoke all on function public.user_can_access_staff(uuid, uuid) from public;
+revoke all on function public.user_can_access_branch_assignment(uuid, uuid, uuid) from public;
+
+grant execute on function public.user_can_access_branch(uuid, uuid) to authenticated, service_role;
+grant execute on function public.user_can_access_staff(uuid, uuid) to authenticated, service_role;
+grant execute on function public.user_can_access_branch_assignment(uuid, uuid, uuid) to authenticated, service_role;
+
+-- Hardened RLS policies (Zero recursion, strict manager & cashier isolation)
+drop policy if exists "members read business branches" on public.branches;
+drop policy if exists "authorized members read business branches" on public.branches;
+create policy "authorized members read business branches"
+on public.branches for select to authenticated
+using (public.user_can_access_branch(auth.uid(), id));
+
+drop policy if exists "members read branch assignments" on public.staff_branch_assignments;
+drop policy if exists "authorized members read branch assignments" on public.staff_branch_assignments;
+create policy "authorized members read branch assignments"
+on public.staff_branch_assignments for select to authenticated
+using (public.user_can_access_branch_assignment(auth.uid(), business_id, branch_id));
+
+drop policy if exists "members read business staff" on public.staff_members;
+drop policy if exists "authorized members read business staff" on public.staff_members;
+create policy "authorized members read business staff"
+on public.staff_members for select to authenticated
+using (public.user_can_access_staff(auth.uid(), id));
 
 -- 1. Safe PIN-configured status projection
 -- Does not return pin_hash, secret tokens, or throttle records.
