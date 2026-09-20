@@ -101,6 +101,10 @@ grant execute on function public.normalize_customer_phone(text) to anon, authent
 -- and truthful loyalty state return.
 -- ------------------------------------------------------------------------------
 
+-- Drop existing function to permit altering return table columns (OUT parameters)
+drop function if exists public.claim_public_pass(text, text);
+drop function if exists public.claim_public_pass(text);
+
 create or replace function public.claim_public_pass(_slug text, _phone text default null)
 returns table (
   pass_serial text,
@@ -258,7 +262,8 @@ grant execute on function public.claim_public_pass(text, text) to anon, authenti
 --   Manager: Strictly scoped to customers with transactions at assigned branches.
 --            CRITICAL: Does NOT return company-wide current_stamps/points,
 --            preventing cross-location data leakage.
--- ------------------------------------------------------------------------------
+-- Drop existing function to permit altering return table columns safely
+drop function if exists public.operations_customers_list(uuid, uuid, text, integer, integer);
 
 create or replace function public.operations_customers_list(
   _business_id uuid,
@@ -437,7 +442,8 @@ grant execute on function public.operations_customers_list(uuid, uuid, text, int
 -- operations_customer_detail
 -- Returns customer profile + chronological activity events.
 -- Manager: transactions and metrics strictly limited to assigned branches.
--- ------------------------------------------------------------------------------
+-- Drop existing function if present
+drop function if exists public.operations_customer_detail(uuid, uuid);
 
 create or replace function public.operations_customer_detail(
   _business_id uuid,
@@ -603,7 +609,8 @@ grant execute on function public.operations_customer_detail(uuid, uuid) to authe
 -- 6. Customers V1 Dashboard Summary RPC
 -- operations_dashboard_summary
 -- Supplies scoped customer counts without requiring client-side full scan.
--- ------------------------------------------------------------------------------
+-- Drop existing function if present
+drop function if exists public.operations_dashboard_summary(uuid, uuid);
 
 create or replace function public.operations_dashboard_summary(
   _business_id uuid,

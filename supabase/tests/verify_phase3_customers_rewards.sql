@@ -69,6 +69,9 @@ end;
 $$;
 
 -- Ensure claim_public_pass
+drop function if exists public.claim_public_pass(text, text);
+drop function if exists public.claim_public_pass(text);
+
 create or replace function public.claim_public_pass(_slug text, _phone text default null)
 returns table (
   pass_serial text,
@@ -202,6 +205,8 @@ end;
 $$;
 
 -- Ensure operations_customers_list
+drop function if exists public.operations_customers_list(uuid, uuid, text, integer, integer);
+
 create or replace function public.operations_customers_list(
   _business_id uuid,
   _branch_id uuid default null,
@@ -368,6 +373,8 @@ end;
 $$;
 
 -- Ensure operations_customer_detail
+drop function if exists public.operations_customer_detail(uuid, uuid);
+
 create or replace function public.operations_customer_detail(
   _business_id uuid,
   _customer_id uuid
