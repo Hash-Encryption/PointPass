@@ -1,10 +1,11 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, useNavigate, Navigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { User } from "@supabase/supabase-js";
 import { Loader2 } from "lucide-react";
 import { useLocale } from "@/lib/i18n";
 import { supabase } from "@/lib/supabase";
+import { isOwner, isManager, isCashier, type OperationsAccess } from "@/lib/access";
 import { AuthSignIn } from "@/components/AuthSignIn";
 import { OnboardingLayout, type OnboardingStepKey } from "@/components/onboarding/OnboardingLayout";
 import { BusinessSetupStep } from "@/components/onboarding/BusinessSetupStep";
@@ -73,6 +74,23 @@ function OnboardingRoute() {
     };
   }, []);
 
+  // Check Super Admin
+  const adminRoleQuery = useQuery({
+    queryKey: ["onboarding-admin-role", user?.id],
+    enabled: Boolean(user),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("user_roles")
+        .select("role")
+        .eq("user_id", user!.id)
+        .eq("role", "super_admin")
+        .is("business_id", null)
+        .maybeSingle();
+      if (error) throw error;
+      return data;
+    },
+  });
+
   // Check if user already has an active business and its onboarding state
   const businessQuery = useQuery({
     queryKey: ["onboarding-business-check", user?.id],
@@ -106,6 +124,42 @@ function OnboardingRoute() {
     },
   });
 
+  // Check Operational Access if a business exists for this user
+  const accessQuery = useQuery({
+    queryKey: ["onboarding-access", businessQuery.data?.business?.id, user?.id],
+    enabled: Boolean(businessQuery.data?.business?.id) && Boolean(user?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .rpc("operations_access", { _business_id: businessQuery.data!.business.id })
+        .single();
+      if (error) throw error;
+      return data as OperationsAccess;
+    },
+  });
+
+  const operationalRole = accessQuery.data?.operational_role;
+  const isOwnerUser = isOwner(operationalRole);
+  const isManagerUser = isManager(operationalRole);
+  const isCashierUser = isCashier(operationalRole);
+  const isSuperAdmin = adminRoleQuery.data?.role === "super_admin";
+
+  useEffect(() => {
+    if (isSuperAdmin) {
+      void navigate({ to: "/admin", replace: true });
+      return;
+    }
+    if (accessQuery.isSuccess) {
+      if (isCashierUser) {
+        void navigate({ to: "/scan", replace: true });
+        return;
+      }
+      if (isManagerUser) {
+        void navigate({ to: "/dashboard", replace: true });
+        return;
+      }
+    }
+  }, [isSuperAdmin, accessQuery.isSuccess, isCashierUser, isManagerUser, navigate]);
+
   useEffect(() => {
     if (!businessQuery.data) return;
     const { business, onboarding } = businessQuery.data;
@@ -125,7 +179,19 @@ function OnboardingRoute() {
     }
   }, [businessQuery.data, navigate]);
 
-  if (!authReady || (user && businessQuery.isLoading)) {
+  if (isSuperAdmin) {
+    return <Navigate to="/admin" replace />;
+  }
+
+  if (accessQuery.isSuccess && isCashierUser) {
+    return <Navigate to="/scan" replace />;
+  }
+
+  if (accessQuery.isSuccess && isManagerUser) {
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  if (!authReady || (user && (businessQuery.isLoading || adminRoleQuery.isLoading))) {
     return (
       <div className="grid min-h-screen place-items-center bg-background">
         <Loader2 className="size-7 animate-spin text-primary" />

@@ -1,9 +1,45 @@
 import { createServerFn } from "@tanstack/react-start";
+import { getRequestIP, getRequestHeader } from "@tanstack/react-start/server";
 import { z } from "zod";
 // @ts-expect-error Cloudflare supplies this runtime module to Pages Functions.
 import { env } from "cloudflare:workers";
 import { createServerSupabaseClient } from "@/lib/server-supabase";
 import { buildWalletPassPayload } from "@/lib/wallet-payload";
+import { captureAppError } from "@/lib/observability";
+
+// Caller-scoped throttle for anonymous guest claims (prevents bot floods while protecting legitimate users)
+const anonClaimThrottle = new Map<string, number[]>();
+const MAX_ANON_PER_WINDOW = 10;
+const ANON_WINDOW_MS = 60_000;
+
+function checkAnonClaimRateLimit(): boolean {
+  try {
+    const ip =
+      getRequestIP({ xForwardedFor: true }) ??
+      getRequestHeader("cf-connecting-ip") ??
+      "anon_caller";
+    const now = Date.now();
+    const timestamps = anonClaimThrottle.get(ip) ?? [];
+    const valid = timestamps.filter((t) => now - t < ANON_WINDOW_MS);
+    if (valid.length >= MAX_ANON_PER_WINDOW) {
+      return false;
+    }
+    valid.push(now);
+    anonClaimThrottle.set(ip, valid);
+
+    // Garbage collection on large cache
+    if (anonClaimThrottle.size > 10_000) {
+      for (const [key, times] of anonClaimThrottle.entries()) {
+        if (times.every((t) => now - t >= ANON_WINDOW_MS)) {
+          anonClaimThrottle.delete(key);
+        }
+      }
+    }
+    return true;
+  } catch {
+    return true; // Fail open to protect legitimate customer traffic
+  }
+}
 
 async function walletFetch(method: "POST" | "PUT", path: string, body: unknown) {
   const apiKey = env.WALLETWALLET_API_KEY ?? process.env["WALLETWALLET_API_KEY"];
@@ -65,6 +101,16 @@ export const createWalletPass = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const supabase = createServerSupabaseClient();
     const cleanPhone = data.phone?.trim() ? data.phone.trim() : null;
+
+    // Caller-scoped rate limit for anonymous claims (where phone is null)
+    if (!cleanPhone && !checkAnonClaimRateLimit()) {
+      captureAppError("CUSTOMER", new Error("Anonymous claim rate limit exceeded for caller"), {
+        slug: data.slug,
+        operation: "claim_public_pass",
+      });
+      throw new Error("Too many guest pass requests from this device. Please wait a moment.");
+    }
+
     const { data: claimData, error: claimError } = await supabase
       .rpc("claim_public_pass", {
         _slug: data.slug,
@@ -72,7 +118,10 @@ export const createWalletPass = createServerFn({ method: "POST" })
       })
       .single();
 
-    if (claimError) throw new Error(claimError.message);
+    if (claimError) {
+      captureAppError("CUSTOMER", claimError, { slug: data.slug, operation: "claim_public_pass" });
+      throw new Error(claimError.message);
+    }
     const claim = claimData as {
       pass_serial: string;
       pass_program_type: "stamp" | "points" | "coupon_morph";
