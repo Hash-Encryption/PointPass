@@ -7,6 +7,10 @@ import { PortalNav } from "@/components/PortalNav";
 import { AuthSignIn } from "@/components/AuthSignIn";
 import { OperationsPanel } from "@/components/OperationsPanel";
 import { AnalyticsPanel } from "@/components/AnalyticsPanel";
+import { OwnerOverview } from "@/components/dashboard/OwnerOverview";
+import { ManagerOverview } from "@/components/dashboard/ManagerOverview";
+import { CustomersPanel } from "@/components/dashboard/CustomersPanel";
+import { JoinQrPanel } from "@/components/dashboard/JoinQrPanel";
 import { PassPreview, type PassDesign } from "@/components/PassPreview";
 import { useLocale } from "@/lib/i18n";
 import { supabase } from "@/lib/supabase";
@@ -21,6 +25,7 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import {
+  Activity,
   AlertTriangle,
   Building2,
   Copy,
@@ -34,6 +39,7 @@ import {
   ShieldAlert,
   Store,
   Trash2,
+  Users,
 } from "lucide-react";
 import { isOwner, isManager, isCashier, type OperationsAccess } from "@/lib/access";
 
@@ -248,7 +254,47 @@ function MerchantDashboard() {
 
   const operationalRole = accessQuery.data?.operational_role;
   const isOwnerUser = isOwner(operationalRole);
-  const isCashierUser = isCashier(operationalRole);
+  const isManagerUser = isManager(operationalRole);
+  const managedBranchIds = useMemo(
+    () => accessQuery.data?.managed_branch_ids ?? [],
+    [accessQuery.data?.managed_branch_ids],
+  );
+
+  const branchesQuery = useQuery({
+    queryKey: ["dashboard-branches", business?.id],
+    enabled: Boolean(business?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("branches")
+        .select("id,name_ar,name_en,is_main,status")
+        .eq("business_id", business!.id)
+        .eq("status", "active")
+        .order("is_main", { ascending: false });
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+
+  const assignedBranches = useMemo(() => {
+    const all = branchesQuery.data ?? [];
+    if (isOwnerUser) return all;
+    return all.filter((b) => managedBranchIds.includes(b.id));
+  }, [isOwnerUser, branchesQuery.data, managedBranchIds]);
+
+  const lockedBranchId = useMemo(() => {
+    if (isManagerUser && managedBranchIds.length === 1) {
+      return managedBranchIds[0];
+    }
+    return null;
+  }, [isManagerUser, managedBranchIds]);
+
+  const [managerBranchId, setManagerBranchId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (lockedBranchId) {
+      setManagerBranchId(lockedBranchId);
+    }
+  }, [lockedBranchId]);
 
   useEffect(() => {
     if (
@@ -257,7 +303,8 @@ function MerchantDashboard() {
       (activeTab === "designer" ||
         activeTab === "pin" ||
         activeTab === "geo" ||
-        activeTab === "push")
+        activeTab === "push" ||
+        activeTab === "qr")
     ) {
       setActiveTab("overview");
     }
@@ -300,44 +347,6 @@ function MerchantDashboard() {
     await businessesQuery.refetch();
     toast.success(successMessage);
     return true;
-  }
-
-  const joinUrl = useMemo(() => {
-    if (!business) return "";
-    if (typeof window !== "undefined") {
-      return `${window.location.origin}/join/${business.slug}`;
-    }
-    return `http://localhost:8080/join/${business.slug}`;
-  }, [business]);
-
-  const qrImageUrl = useMemo(() => {
-    if (!joinUrl) return "";
-    return `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(joinUrl)}`;
-  }, [joinUrl]);
-
-  async function downloadQR() {
-    if (!qrImageUrl || !business) return;
-    try {
-      const response = await fetch(qrImageUrl);
-      const blob = await response.blob();
-      const blobUrl = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = blobUrl;
-      a.download = `${business.slug}-join-qr.png`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(blobUrl);
-      toast.success(ar ? "تم تحميل رمز QR بنجاح!" : "QR code downloaded successfully!");
-    } catch {
-      toast.error(ar ? "تعذر تحميل رمز QR" : "Failed to download QR code");
-    }
-  }
-
-  function copyJoinUrl() {
-    if (!joinUrl) return;
-    navigator.clipboard.writeText(joinUrl);
-    toast.success(ar ? "تم نسخ رابط الانضمام إلى الحافظة!" : "Join link copied to clipboard!");
   }
 
   async function saveDesign() {
@@ -502,27 +511,7 @@ function MerchantDashboard() {
   }
 
   if (accessQuery.isSuccess && isCashierUser) {
-    return (
-      <div className="grid min-h-screen place-items-center bg-background px-4">
-        <div className="panel max-w-md p-6 text-center">
-          <Store className="mx-auto size-9 text-primary" />
-          <h1 className="mt-4 text-xl font-bold">{ar ? "حساب كاشير" : "Cashier Account"}</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            {ar
-              ? "هذا الحساب مخصص للكاشير. يرجى التوجه إلى شاشة الكاشير لمسح وإضافة الأختام."
-              : "This account is registered as a cashier. Please use the cashier terminal to scan passes."}
-          </p>
-          <div className="mt-5 flex justify-center gap-3">
-            <Button asChild>
-              <a href="/scan">{ar ? "فتح شاشة الكاشير" : "Open Cashier Terminal"}</a>
-            </Button>
-            <Button variant="outline" onClick={() => supabase.auth.signOut()}>
-              {ar ? "تسجيل الخروج" : "Sign out"}
-            </Button>
-          </div>
-        </div>
-      </div>
-    );
+    return <Navigate to="/scan" replace />;
   }
 
   return (
@@ -629,143 +618,77 @@ function MerchantDashboard() {
           <TabsList className="flex flex-wrap">
             <TabsTrigger value="overview">
               <LayoutDashboard className="me-1.5 size-4" />
-              {ar ? "الرئيسية (مركز التحكم)" : "Main Overview"}
+              {t("overview")}
             </TabsTrigger>
-            {isOwnerUser ? (
-              <TabsTrigger value="designer">
-                <Edit3 className="me-1.5 size-4" />
-                {t("passDesigner")}
-              </TabsTrigger>
-            ) : null}
+            <TabsTrigger value="customers">
+              <Users className="me-1.5 size-4" />
+              {t("customers")}
+            </TabsTrigger>
             <TabsTrigger value="operations">
               <Building2 className="me-1.5 size-4" />
               {t("locationsAndTeam")}
             </TabsTrigger>
+            <TabsTrigger value="analytics">
+              <Activity className="me-1.5 size-4" />
+              {t("analytics")}
+            </TabsTrigger>
             {isOwnerUser ? (
               <>
-                <TabsTrigger value="geo">{t("geofence")}</TabsTrigger>
+                <TabsTrigger value="designer">
+                  <Edit3 className="me-1.5 size-4" />
+                  {t("passDesigner")}
+                </TabsTrigger>
+                <TabsTrigger value="qr">
+                  <QrCode className="me-1.5 size-4" />
+                  {t("joinQr")}
+                </TabsTrigger>
                 <TabsTrigger value="push">{t("campaigns")}</TabsTrigger>
+                <TabsTrigger value="geo">{t("geofence")}</TabsTrigger>
               </>
             ) : null}
-            <TabsTrigger value="analytics">{t("analytics")}</TabsTrigger>
           </TabsList>
 
           {/* Main Overview Tab */}
           <TabsContent value="overview" className="mt-6 space-y-6">
-            {/* Header Summary & Quick Actions */}
-            <div className="panel grid gap-6 p-6 lg:grid-cols-3 items-center">
-              <div className="space-y-2 lg:col-span-2">
-                <div className="flex items-center gap-2">
-                  <Badge variant="outline" className="capitalize">
-                    {ar ? PASS_TEMPLATES[program].name.ar : PASS_TEMPLATES[program].name.en}
-                  </Badge>
-                  <Badge variant="default">{ar ? "الحملة نشطة" : "Campaign Active"}</Badge>
-                </div>
-                <h2 className="text-2xl font-bold">
-                  {ar
-                    ? design.businessName || "اسم المنشأة"
-                    : design.businessNameEn || "Business Name"}
-                </h2>
-                <p className="text-sm text-muted-foreground">
-                  {ar
-                    ? design.headline || "عروض الولاء للمشتركين"
-                    : design.headlineEn || "Loyalty offer for customers"}
-                </p>
-              </div>
-
-              {/* Quick Action Buttons */}
-              {isOwnerUser ? (
-                <div className="flex flex-wrap gap-3 lg:justify-end">
-                  <Button variant="default" onClick={() => setActiveTab("designer")}>
-                    <Edit3 className="me-2 size-4" />
-                    {ar ? "تعديل تصميم البطاقة" : "Edit Pass Design"}
-                  </Button>
-                  <Button variant="destructive" onClick={() => setShowDeleteModal(true)}>
-                    <Trash2 className="me-2 size-4" />
-                    {ar ? "حذف / إعادة ضبط الحملة" : "Delete / Reset Campaign"}
-                  </Button>
-                </div>
-              ) : null}
-            </div>
-
-            {/* Sharing & QR Code Section */}
-            <div className="grid gap-6 md:grid-cols-2">
-              {/* Public Join Link Card */}
-              <div className="panel flex flex-col justify-between p-6">
-                <div className="space-y-4">
-                  <div className="flex items-center gap-2 text-primary font-semibold">
-                    <ExternalLink className="size-5" />
-                    <h3>{ar ? "رابط انضمام العملاء" : "Public Join Link"}</h3>
-                  </div>
-                  <p className="text-xs text-muted-foreground leading-relaxed">
-                    {ar
-                      ? "شارك هذا الرابط مع عملائك ليتمكنوا من الانضمام لبرنامج الولاء وحفظ بطاقتك مباشرة في محفظة Apple أو Google."
-                      : "Share this link with your customers to let them join your loyalty program and save your pass directly into Apple or Google Wallet."}
-                  </p>
-                  <div className="flex items-center gap-2 rounded-md border border-input bg-muted/50 p-2 text-xs font-mono">
-                    <span className="truncate flex-1 dir-ltr">{joinUrl}</span>
-                    <Button size="sm" variant="secondary" onClick={copyJoinUrl}>
-                      <Copy className="size-3.5 me-1" />
-                      {ar ? "نسخ" : "Copy"}
-                    </Button>
-                  </div>
-                </div>
-                <div className="mt-4 pt-4 border-t">
-                  <a
-                    href={joinUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs font-medium text-primary hover:underline flex items-center gap-1"
-                  >
-                    {ar ? "معاينة صفحة الانضمام للعملاء" : "Preview customer join page"}{" "}
-                    <ExternalLink className="size-3" />
-                  </a>
-                </div>
-              </div>
-
-              {/* Downloadable QR Code Card */}
-              <div className="panel flex flex-col items-center p-6 text-center space-y-4">
-                <div className="flex items-center gap-2 text-primary font-semibold">
-                  <QrCode className="size-5" />
-                  <h3>{ar ? "رمز QR المباشر للانضمام" : "Printable Join QR Code"}</h3>
-                </div>
-                <div className="relative rounded-xl border bg-white p-3 shadow-xs">
-                  <img
-                    src={qrImageUrl}
-                    alt="Public Join QR Code"
-                    className="size-44 object-contain"
-                  />
-                </div>
-                <p className="text-xs text-muted-foreground max-w-xs">
-                  {ar
-                    ? "اطبع رمز QR واعرضه على الطاولات أو الكاونتر ليقوم العملاء بمسحه فوراً."
-                    : "Print this QR code on table tents or at the counter for instant customer sign-ups."}
-                </p>
-                <Button variant="outline" size="sm" onClick={downloadQR}>
-                  <Download className="me-2 size-4" />
-                  {ar ? "تحميل رمز QR (صورة PNG)" : "Download QR Code (PNG)"}
-                </Button>
-              </div>
-            </div>
-
-            {/* Current Pass Live Preview */}
-            <div className="panel p-6 space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="font-bold text-lg">
-                  {ar ? "معاينة البطاقة الحالية" : "Current Pass Preview"}
-                </h3>
-                {isOwnerUser ? (
-                  <Button size="sm" variant="outline" onClick={() => setActiveTab("designer")}>
-                    <Edit3 className="me-1.5 size-3.5" />
-                    {ar ? "تعديل" : "Edit"}
-                  </Button>
-                ) : null}
-              </div>
-              <div className="grid place-items-center py-4">
-                <PassPreview design={design} locale={locale} />
-              </div>
-            </div>
+            {isOwnerUser ? (
+              <OwnerOverview
+                business={business}
+                ar={ar}
+                onNavigateTab={(tab) => setActiveTab(tab)}
+              />
+            ) : (
+              <ManagerOverview
+                businessId={business.id}
+                ar={ar}
+                selectedBranchId={managerBranchId}
+                onBranchChange={setManagerBranchId}
+                assignedBranches={assignedBranches}
+                onNavigateTab={(tab) => setActiveTab(tab)}
+              />
+            )}
           </TabsContent>
+
+          {/* Customers Tab */}
+          <TabsContent value="customers" className="mt-6 space-y-6">
+            <CustomersPanel
+              businessId={business.id}
+              ar={ar}
+              isOwnerUser={isOwnerUser}
+              lockedBranchId={lockedBranchId}
+              assignedBranches={assignedBranches}
+            />
+          </TabsContent>
+
+          {/* Customer Join & Local QR Tab (Owner only) */}
+          {isOwnerUser ? (
+            <TabsContent value="qr" className="mt-6 space-y-6">
+              <JoinQrPanel
+                slug={business.slug}
+                businessName={ar ? business.name_ar : business.name_en}
+                ar={ar}
+              />
+            </TabsContent>
+          ) : null}
 
           {/* Pass designer */}
           {isOwnerUser ? (
@@ -983,6 +906,16 @@ function MerchantDashboard() {
 
           <TabsContent value="operations" className="mt-4">
             <OperationsPanel businessId={business.id} ar={ar} />
+          </TabsContent>
+
+          <TabsContent value="analytics" className="mt-4">
+            <AnalyticsPanel
+              businessId={business.id}
+              ar={ar}
+              lockedBranchId={
+                lockedBranchId || (isManagerUser && managerBranchId ? managerBranchId : undefined)
+              }
+            />
           </TabsContent>
 
           {/* Geofence */}

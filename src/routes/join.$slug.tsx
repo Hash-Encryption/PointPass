@@ -53,6 +53,16 @@ function ClaimPage() {
   const [phone, setPhone] = useState("");
   const [loading, setLoading] = useState(false);
   const [links, setLinks] = useState<{ apple: string | null; google: string | null } | null>(null);
+  const [resumedInfo, setResumedInfo] = useState<{
+    isResumed: boolean;
+    alreadyEnrolled: boolean;
+    stamps?: number;
+    points?: number;
+    morphed?: boolean;
+    targetStamps?: number;
+    pointsPerReward?: number;
+    programType?: string;
+  } | null>(null);
 
   // Auto-detect if user is on Apple / Safari vs Android
   const isAppleDevice = useMemo(() => {
@@ -89,7 +99,8 @@ function ClaimPage() {
 
   async function generatePass(customPhone?: string) {
     const targetPhone = (customPhone ?? phone).trim();
-    const effectivePhone = targetPhone || `Guest-${Math.floor(1000 + Math.random() * 9000)}`;
+    // Ponytail & Safety: Anonymous customer passes null/undefined, never a fake Guest phone.
+    const effectivePhone = targetPhone ? targetPhone : undefined;
 
     setLoading(true);
     try {
@@ -101,8 +112,24 @@ function ClaimPage() {
       });
 
       setLinks({ apple: res.appleUrl, google: res.googleUrl });
+      setResumedInfo({
+        isResumed: Boolean(res.isResumed),
+        alreadyEnrolled: Boolean(res.alreadyEnrolled),
+        stamps: res.stamps,
+        points: res.points,
+        morphed: res.morphed,
+        targetStamps: res.targetStamps,
+        pointsPerReward: res.pointsPerReward,
+        programType: res.programType,
+      });
 
-      if (res.ok) {
+      if (res.isResumed) {
+        toast.success(
+          ar
+            ? "مرحباً بعودتك! تم العثور على بطاقتك السابقة."
+            : "Welcome back! Existing loyalty pass found.",
+        );
+      } else if (res.ok) {
         toast.success(ar ? "تم إنشاء بطاقتك بنجاح!" : "Your pass is ready!");
         const targetUrl = isAppleDevice ? res.appleUrl : res.googleUrl || res.appleUrl;
         if (targetUrl) {
@@ -120,8 +147,8 @@ function ClaimPage() {
         error instanceof Error
           ? error.message
           : ar
-            ? "تعذر إنشاء البطاقة"
-            : "Failed to create pass",
+            ? "تعذر إنشاء أو استرجاع البطاقة"
+            : "Failed to process pass",
       );
     } finally {
       setLoading(false);
@@ -259,11 +286,60 @@ function ClaimPage() {
                   : "By continuing you agree to receive wallet offer notifications"}
               </p>
             </form>
+          ) : resumedInfo?.alreadyEnrolled && !links?.apple && !links?.google ? (
+            <div className="space-y-4 text-center">
+              <div className="flex items-center justify-center gap-2 text-primary font-bold text-lg">
+                <Sparkles className="size-5" />
+                <span>{ar ? "مرحباً بعودتك!" : "Welcome back!"}</span>
+              </div>
+              <div className="rounded-2xl border border-primary/20 bg-primary/5 p-4">
+                <div className="text-xs text-muted-foreground">
+                  {ar ? "حالة البطاقة" : "Pass Status"}
+                </div>
+                <div className="text-base font-bold text-foreground mt-1">
+                  {ar ? "البطاقة نشطة ومسجلة في محفظتك" : "Pass is active in your phone wallet"}
+                </div>
+                {resumedInfo.programType === "points" ? (
+                  <div className="mt-3 text-2xl font-extrabold text-primary">
+                    {resumedInfo.points ?? 0} {ar ? "نقطة" : "Points"}
+                  </div>
+                ) : (
+                  <div className="mt-3 text-2xl font-extrabold text-primary">
+                    {resumedInfo.stamps ?? 0} / {resumedInfo.targetStamps ?? 9}{" "}
+                    {ar ? "أختام" : "Stamps"}
+                  </div>
+                )}
+                <p className="mt-3 text-xs text-muted-foreground">
+                  {ar
+                    ? "تتحدث البطاقة تلقائياً في محفظتك عند مسحها لدى الكاشير."
+                    : "Your card updates automatically in your phone wallet when scanned at checkout."}
+                </p>
+              </div>
+
+              <Button
+                variant="outline"
+                className="w-full text-xs"
+                onClick={() => {
+                  setResumedInfo(null);
+                  setLinks(null);
+                }}
+              >
+                {ar ? "تسجيل رقم آخر" : "Enter a different number"}
+              </Button>
+            </div>
           ) : (
             <div className="space-y-3 text-center">
               <div className="flex items-center justify-center gap-2 text-primary font-bold text-lg">
                 <Sparkles className="size-5" />
-                <span>{ar ? "بطاقتك جاهزة" : "Your card is ready"}</span>
+                <span>
+                  {resumedInfo?.isResumed
+                    ? ar
+                      ? "تم استرجاع بطاقتك بنجاح"
+                      : "Your pass was retrieved"
+                    : ar
+                      ? "بطاقتك جاهزة"
+                      : "Your card is ready"}
+                </span>
               </div>
               <p className="text-xs text-muted-foreground">
                 {ar
@@ -272,15 +348,15 @@ function ClaimPage() {
               </p>
 
               <Button
-                asChild={Boolean(links.apple)}
+                asChild={Boolean(links?.apple)}
                 className={`h-12 w-full text-base ${
                   isAppleDevice
                     ? "bg-surface-dark text-surface-dark-foreground hover:bg-surface-dark/90 ring-2 ring-primary"
                     : "bg-surface-dark text-surface-dark-foreground"
                 }`}
-                disabled={!links.apple}
+                disabled={!links?.apple}
               >
-                {links.apple ? (
+                {links?.apple ? (
                   <a href={links.apple}>
                     <Apple className="me-2 size-5" /> {t("appleWallet")}
                   </a>
@@ -292,12 +368,12 @@ function ClaimPage() {
               </Button>
 
               <Button
-                asChild={Boolean(links.google)}
+                asChild={Boolean(links?.google)}
                 variant={isAppleDevice ? "outline" : "default"}
                 className={`h-12 w-full text-base ${!isAppleDevice ? "ring-2 ring-primary" : ""}`}
-                disabled={!links.google}
+                disabled={!links?.google}
               >
-                {links.google ? (
+                {links?.google ? (
                   <a href={links.google}>
                     <Smartphone className="me-2 size-5" /> {t("googleWallet")}
                   </a>

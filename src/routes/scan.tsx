@@ -84,6 +84,11 @@ function CashierTerminal() {
   const [serial, setSerial] = useState<string | null>(null);
   const [amount, setAmount] = useState("");
   const [scanning, setScanning] = useState(false);
+  const [lastResult, setLastResult] = useState<{
+    success: boolean;
+    message: string;
+    balance?: string;
+  } | null>(null);
   const scannerRef = useRef<{ stop: () => Promise<void>; clear: () => void } | null>(null);
 
   useEffect(() => {
@@ -238,21 +243,49 @@ function CashierTerminal() {
         ...actionInput,
       },
     });
+
+    let balanceStr = "";
+    if (res.programType === "points") {
+      balanceStr = `${res.points ?? 0} ${ar ? "نقطة" : "pts"}`;
+    } else if (res.programType === "stamp" || res.morphed) {
+      balanceStr = `${res.stamps ?? 0} / ${res.targetStamps ?? 9} ${ar ? "أختام" : "stamps"}`;
+    } else if (res.programType === "coupon_morph" && !res.morphed) {
+      balanceStr = ar ? "كوبون ترحيبي (تم الاستخدام)" : "Intro coupon redeemed";
+    }
+
     if (res.ok) {
       toast.success(ar ? "تم تسجيل العملية وتحديث المحفظة" : "Action recorded and wallet updated");
+      setLastResult({
+        success: true,
+        message: ar ? "تم تسجيل العملية بنجاح" : "Action recorded successfully",
+        balance: balanceStr,
+      });
     } else if (res.recorded) {
       toast.warning(
         ar
           ? "تم تسجيل العملية، لكن مزامنة المحفظة غير متاحة"
           : "Action recorded, but wallet sync is unavailable",
       );
+      setLastResult({
+        success: true,
+        message: ar ? "تم تسجيل العملية في النظام" : "Action recorded in PointPass",
+        balance: balanceStr,
+      });
     } else if (res.sessionExpired) {
       toast.error(
         ar ? "انتهت جلسة الكاشير. افتح الشاشة مجدداً" : "Cashier session expired. Unlock again",
       );
+      setLastResult({
+        success: false,
+        message: ar ? "انتهت جلسة الكاشير" : "Cashier session expired",
+      });
       lockTerminal(false);
     } else {
       toast.error(res.error ?? (ar ? "تعذر تسجيل العملية" : "Could not record action"));
+      setLastResult({
+        success: false,
+        message: res.error ?? (ar ? "تعذر تسجيل العملية" : "Could not record action"),
+      });
     }
     if (action === "points") setAmount("");
   }
@@ -483,13 +516,32 @@ function CashierTerminal() {
               {ar ? "جارٍ المسح…" : "Scanning…"}
             </p>
           )}
-          <p className="mt-3 text-center text-xs opacity-70" aria-live="polite">
+          <p className="mt-3 text-center text-xs opacity-70 font-mono" aria-live="polite">
             {serial
-              ? `${ar ? "البطاقة" : "Pass"}: ${serial}`
+              ? `${ar ? "البطاقة" : "Pass"}: ••••${serial.slice(-8)}`
               : ar
                 ? "لم يتم مسح بطاقة بعد"
                 : "No pass scanned yet"}
           </p>
+
+          {lastResult ? (
+            <div
+              className={`mt-3 rounded-xl border p-3 text-center text-xs ${
+                lastResult.success
+                  ? "border-primary/40 bg-primary/10 text-primary"
+                  : "border-destructive/40 bg-destructive/10 text-destructive"
+              }`}
+            >
+              <div className="font-bold text-sm">{lastResult.message}</div>
+              {lastResult.balance ? (
+                <div className="mt-1 text-white/90">
+                  {ar
+                    ? `الرصيد المحدث: ${lastResult.balance}`
+                    : `Updated balance: ${lastResult.balance}`}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
         <Button className="h-16 w-full text-lg font-bold" onClick={() => act("stamp")}>

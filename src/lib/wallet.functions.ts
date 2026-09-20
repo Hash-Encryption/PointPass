@@ -57,17 +57,18 @@ async function walletFetch(method: "POST" | "PUT", path: string, body: unknown) 
 
 const createPassSchema = z.object({
   slug: z.string().min(1).max(64),
-  phone: z.string().min(6).max(20),
+  phone: z.string().trim().max(30).optional().nullable(),
 });
 
 export const createWalletPass = createServerFn({ method: "POST" })
   .validator((d: unknown) => createPassSchema.parse(d))
   .handler(async ({ data }) => {
     const supabase = createServerSupabaseClient();
+    const cleanPhone = data.phone?.trim() ? data.phone.trim() : null;
     const { data: claimData, error: claimError } = await supabase
       .rpc("claim_public_pass", {
         _slug: data.slug,
-        _phone: data.phone,
+        _phone: cleanPhone,
       })
       .single();
 
@@ -78,9 +79,36 @@ export const createWalletPass = createServerFn({ method: "POST" })
       business_name: string;
       business_offer: string;
       business_target_stamps: number;
+      business_sar_per_point: number;
+      business_points_per_reward: number;
+      pass_stamps: number;
+      pass_points: number;
+      pass_morphed: boolean;
+      pass_wallet_serial: string | null;
+      is_resumed: boolean;
     } | null;
     if (!claim) throw new Error("Pass registration returned no result");
 
+    // Resumed pass with an existing attached wallet: preserve loyalty identity and state
+    if (claim.is_resumed && claim.pass_wallet_serial) {
+      return {
+        ok: true,
+        error: null as string | null,
+        isResumed: true,
+        alreadyEnrolled: true,
+        programType: claim.pass_program_type,
+        stamps: claim.pass_stamps,
+        points: claim.pass_points,
+        morphed: claim.pass_morphed,
+        targetStamps: claim.business_target_stamps,
+        sarPerPoint: claim.business_sar_per_point,
+        pointsPerReward: claim.business_points_per_reward,
+        appleUrl: null as string | null,
+        googleUrl: null as string | null,
+      };
+    }
+
+    // Build payload using actual loyalty state (never 0 if resumed)
     const result = await walletFetch(
       "POST",
       "/passes",
@@ -89,9 +117,9 @@ export const createWalletPass = createServerFn({ method: "POST" })
         businessName: claim.business_name,
         offer: claim.business_offer,
         programType: claim.pass_program_type,
-        stamps: 0,
-        points: 0,
-        morphed: false,
+        stamps: claim.pass_stamps ?? 0,
+        points: claim.pass_points ?? 0,
+        morphed: claim.pass_morphed ?? false,
         targetStamps: claim.business_target_stamps,
       }),
     );
@@ -100,6 +128,15 @@ export const createWalletPass = createServerFn({ method: "POST" })
       return {
         ok: false,
         error: result.error,
+        isResumed: claim.is_resumed,
+        alreadyEnrolled: false,
+        programType: claim.pass_program_type,
+        stamps: claim.pass_stamps,
+        points: claim.pass_points,
+        morphed: claim.pass_morphed,
+        targetStamps: claim.business_target_stamps,
+        sarPerPoint: claim.business_sar_per_point,
+        pointsPerReward: claim.business_points_per_reward,
         appleUrl: null as string | null,
         googleUrl: null as string | null,
       };
@@ -113,6 +150,15 @@ export const createWalletPass = createServerFn({ method: "POST" })
       return {
         ok: false,
         error: "WalletWallet returned an incomplete pass response",
+        isResumed: claim.is_resumed,
+        alreadyEnrolled: false,
+        programType: claim.pass_program_type,
+        stamps: claim.pass_stamps,
+        points: claim.pass_points,
+        morphed: claim.pass_morphed,
+        targetStamps: claim.business_target_stamps,
+        sarPerPoint: claim.business_sar_per_point,
+        pointsPerReward: claim.business_points_per_reward,
         appleUrl: null,
         googleUrl: null,
       };
@@ -127,6 +173,15 @@ export const createWalletPass = createServerFn({ method: "POST" })
     return {
       ok: true,
       error: null as string | null,
+      isResumed: claim.is_resumed,
+      alreadyEnrolled: false,
+      programType: claim.pass_program_type,
+      stamps: claim.pass_stamps,
+      points: claim.pass_points,
+      morphed: claim.pass_morphed,
+      targetStamps: claim.business_target_stamps,
+      sarPerPoint: claim.business_sar_per_point,
+      pointsPerReward: claim.business_points_per_reward,
       appleUrl: payload.shareUrl,
       googleUrl: payload.googleSaveUrl ?? payload.shareUrl,
     };
@@ -179,7 +234,16 @@ export const updateWalletPass = createServerFn({ method: "POST" })
     } | null;
 
     if (!state?.wallet_serial) {
-      return { ok: false as const, recorded: true as const, error: "Wallet pass is not attached" };
+      return {
+        ok: false as const,
+        recorded: true as const,
+        error: "Wallet pass is not attached",
+        stamps: state?.pass_stamps,
+        points: state?.pass_points,
+        morphed: state?.pass_morphed,
+        programType: state?.pass_program_type,
+        targetStamps: state?.business_target_stamps,
+      };
     }
 
     const result = await walletFetch(
@@ -197,7 +261,16 @@ export const updateWalletPass = createServerFn({ method: "POST" })
         ...(data.action === "redeem" ? { notification: "Reward redeemed" } : {}),
       }),
     );
-    return { ok: result.ok, recorded: true as const, error: result.error };
+    return {
+      ok: result.ok,
+      recorded: true as const,
+      error: result.error,
+      stamps: state.pass_stamps,
+      points: state.pass_points,
+      morphed: state.pass_morphed,
+      programType: state.pass_program_type,
+      targetStamps: state.business_target_stamps,
+    };
   });
 
 const pushSchema = z.object({

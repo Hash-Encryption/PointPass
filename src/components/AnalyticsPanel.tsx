@@ -212,7 +212,7 @@ export function AnalyticsPanel({
 }: {
   businessId: string;
   ar: boolean;
-  lockedBranchId?: string;
+  lockedBranchId?: string | undefined;
 }) {
   const locale = ar ? "ar" : "en";
   const text = copy[locale];
