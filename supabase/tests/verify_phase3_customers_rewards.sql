@@ -564,11 +564,11 @@ begin
     on conflict (id) do nothing;
   end if;
 
-  -- Business A
+  -- Business A (Plan multi_location allows multiple branches)
   insert into public.businesses (
-    id, slug, name_ar, name_en, owner_id, status, program_type, target_stamps, sar_per_point, points_per_reward
+    id, slug, name_ar, name_en, owner_id, status, plan, program_type, target_stamps, sar_per_point, points_per_reward
   ) values (
-    _biz_a_id, 'test-biz-a', 'مطعم أ', 'Restaurant A', _owner_a_id, 'active', 'stamp', 9, 10, 100
+    _biz_a_id, 'test-biz-a', 'مطعم أ', 'Restaurant A', _owner_a_id, 'active', 'multi_location', 'stamp', 9, 10, 100
   );
 
   -- Branches for Business A
@@ -593,9 +593,9 @@ begin
 
   -- Business B (Cross-tenant)
   insert into public.businesses (
-    id, slug, name_ar, name_en, owner_id, status, program_type
+    id, slug, name_ar, name_en, owner_id, status, plan, program_type
   ) values (
-    _biz_b_id, 'test-biz-b', 'مقهى ب', 'Cafe B', _owner_b_id, 'active', 'points'
+    _biz_b_id, 'test-biz-b', 'مقهى ب', 'Cafe B', _owner_b_id, 'active', 'multi_location', 'points'
   );
 
   insert into public.branches (id, business_id, code, name_ar, name_en, status)
