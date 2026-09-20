@@ -255,6 +255,50 @@ revoke all on function public.claim_public_pass(text, text) from public;
 grant execute on function public.claim_public_pass(text, text) to anon, authenticated;
 
 -- ------------------------------------------------------------------------------
+-- 3b. Helper: managed_branch_ids
+-- Returns active branch IDs managed by the user, or all active branches if owner.
+-- ------------------------------------------------------------------------------
+
+drop function if exists public.managed_branch_ids(uuid, uuid);
+create or replace function public.managed_branch_ids(_user_id uuid, _business_id uuid)
+returns uuid[]
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  _can_manage_biz boolean;
+  _branches uuid[];
+begin
+  if _user_id is null or _business_id is null then
+    return array[]::uuid[];
+  end if;
+
+  _can_manage_biz := public.can_manage_business(_user_id, _business_id);
+
+  if _can_manage_biz then
+    select coalesce(array_agg(b.id), array[]::uuid[]) into _branches
+    from public.branches b
+    where b.business_id = _business_id and b.status = 'active';
+  else
+    select coalesce(array_agg(a.branch_id), array[]::uuid[]) into _branches
+    from public.staff_members s
+    join public.staff_branch_assignments a
+      on a.staff_id = s.id and a.business_id = s.business_id
+    where s.auth_user_id = _user_id
+      and s.business_id = _business_id
+      and s.status = 'active';
+  end if;
+
+  return coalesce(_branches, array[]::uuid[]);
+end;
+$$;
+
+revoke all on function public.managed_branch_ids(uuid, uuid) from public;
+grant execute on function public.managed_branch_ids(uuid, uuid) to authenticated, service_role;
+
+-- ------------------------------------------------------------------------------
 -- 4. Customers V1 List RPC
 -- operations_customers_list
 -- Role-scoped:
