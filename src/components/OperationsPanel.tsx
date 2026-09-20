@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { supabase } from "@/lib/supabase";
+import { canManageBusiness, canManageBranch, type OperationsAccess } from "@/lib/access";
+import { canAddLocation, getLocationEntitlement } from "@/lib/entitlements";
 
 type Branch = {
   id: string;
@@ -91,7 +93,7 @@ export function OperationsPanel({ businessId, ar }: { businessId: string; ar: bo
         .rpc("operations_access", { _business_id: businessId })
         .single();
       if (error) throw error;
-      return data as { operational_role: string; can_manage: boolean };
+      return data as OperationsAccess;
     },
   });
 
@@ -99,7 +101,7 @@ export function OperationsPanel({ businessId, ar }: { businessId: string; ar: bo
     queryKey: ["business-operations", businessId],
     enabled: accessQuery.isSuccess,
     queryFn: async () => {
-      const [branches, staff, assignments, sessions] = await Promise.all([
+      const [branches, staff, assignments, sessions, business] = await Promise.all([
         supabase
           .from("branches")
           .select("id,code,name_ar,name_en,address_ar,address_en,status")
@@ -120,30 +122,57 @@ export function OperationsPanel({ businessId, ar }: { businessId: string; ar: bo
           .eq("business_id", businessId)
           .order("created_at", { ascending: false })
           .limit(50),
+        supabase.from("businesses").select("plan").eq("id", businessId).maybeSingle(),
       ]);
-      const error = branches.error ?? staff.error ?? assignments.error ?? sessions.error;
+      const error =
+        branches.error ?? staff.error ?? assignments.error ?? sessions.error ?? business.error;
       if (error) throw error;
       return {
         branches: branches.data as Branch[],
         staff: staff.data as Staff[],
         assignments: assignments.data as Assignment[],
         sessions: sessions.data as CashierSession[],
+        plan: (business.data?.plan as string | null) ?? "starter",
       };
     },
   });
 
-  const canManage = accessQuery.data?.can_manage ?? false;
+  const access = accessQuery.data;
+  const canManageBiz = canManageBusiness(access);
+  const userCanManageBranch = (branchId: string) => canManageBranch(branchId, access);
+
   const data = operationsQuery.data ?? {
     branches: [],
     staff: [],
     assignments: [],
     sessions: [],
+    plan: "starter",
   };
   const branchById = new Map(data.branches.map((branch) => [branch.id, branch]));
   const staffById = new Map(data.staff.map((member) => [member.id, member]));
 
+  const entitlement = getLocationEntitlement(data.plan);
+  const activeBranchesCount = data.branches.filter((b) => b.status === "active").length;
+  const atLocationLimit = !canAddLocation(activeBranchesCount, data.plan);
+
   async function saveBranch(event: React.FormEvent) {
     event.preventDefault();
+    if (!branchForm.id && !canManageBiz) {
+      toast.error(
+        ar
+          ? "إنشاء الفروع مقتصر على مالك المنشأة"
+          : "Branch creation is restricted to business owners",
+      );
+      return;
+    }
+    if (!branchForm.id && atLocationLimit) {
+      toast.error(
+        ar
+          ? `تم بلوغ الحد الأقصى للفروع (${entitlement.maxLocations} فرع)`
+          : `Location limit reached (${entitlement.maxLocations} location(s))`,
+      );
+      return;
+    }
     setSaving(true);
     const { error } = await supabase.rpc("operations_upsert_branch", {
       _business_id: businessId,
@@ -252,15 +281,30 @@ export function OperationsPanel({ businessId, ar }: { businessId: string; ar: bo
               : "Branches, staff, assignments, and cashier device sessions"}
           </p>
         </div>
-        <Badge variant={canManage ? "default" : "outline"}>
+        <Badge variant={canManageBiz ? "default" : "outline"}>
           {accessQuery.data?.operational_role}
         </Badge>
       </div>
 
       <section className="grid gap-6 lg:grid-cols-2">
-        {canManage ? (
+        {canManageBiz || (branchForm.id && userCanManageBranch(branchForm.id)) ? (
           <form className="panel space-y-3 p-5" onSubmit={saveBranch}>
-            <h3 className="font-semibold">{ar ? "إضافة / تعديل فرع" : "Add / edit branch"}</h3>
+            <h3 className="font-semibold">
+              {branchForm.id
+                ? ar
+                  ? "تعديل الفرع"
+                  : "Edit branch"
+                : ar
+                  ? "إضافة فرع جديد"
+                  : "Add new branch"}
+            </h3>
+            {!branchForm.id && atLocationLimit ? (
+              <div className="rounded-md bg-muted p-2.5 text-xs text-muted-foreground">
+                {ar
+                  ? `تم بلوغ الحد الأقصى للفروع في الباقة الحالية (${entitlement.maxLocations} فرع).`
+                  : `Location limit reached for current plan (${entitlement.maxLocations} location(s)).`}
+              </div>
+            ) : null}
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label={ar ? "رمز الفرع" : "Branch code"}>
                 <Input
@@ -312,7 +356,7 @@ export function OperationsPanel({ businessId, ar }: { businessId: string; ar: bo
               </Field>
             </div>
             <div className="flex gap-2">
-              <Button type="submit" disabled={saving}>
+              <Button type="submit" disabled={saving || (!branchForm.id && atLocationLimit)}>
                 {ar ? "حفظ الفرع" : "Save branch"}
               </Button>
               {branchForm.id ? (
@@ -332,7 +376,7 @@ export function OperationsPanel({ businessId, ar }: { businessId: string; ar: bo
                 <button
                   key={branch.id}
                   type="button"
-                  disabled={!canManage}
+                  disabled={!userCanManageBranch(branch.id)}
                   className="flex w-full items-center justify-between rounded-lg border p-3 text-start disabled:cursor-default"
                   onClick={() =>
                     setBranchForm({
@@ -371,7 +415,7 @@ export function OperationsPanel({ businessId, ar }: { businessId: string; ar: bo
       </section>
 
       <section className="grid gap-6 lg:grid-cols-2">
-        {canManage ? (
+        {canManageBiz ? (
           <form className="panel space-y-3 p-5" onSubmit={saveStaff}>
             <h3 className="font-semibold">{ar ? "إضافة / تعديل موظف" : "Add / edit staff"}</h3>
             <div className="grid gap-3 sm:grid-cols-2">
@@ -391,11 +435,37 @@ export function OperationsPanel({ businessId, ar }: { businessId: string; ar: bo
                     setStaffForm({ ...staffForm, role: e.target.value as Staff["role"] })
                   }
                 >
-                  {(["owner", "admin", "manager", "staff", "cashier"] as const).map((role) => (
-                    <option key={role} value={role}>
-                      {role}
-                    </option>
-                  ))}
+                  {(() => {
+                    const options: { value: Staff["role"]; label: string }[] = [
+                      { value: "manager", label: ar ? "مدير فرع" : "Manager" },
+                      { value: "cashier", label: ar ? "كاشير" : "Cashier" },
+                    ];
+                    if (
+                      staffForm.id &&
+                      (staffForm.role === "owner" ||
+                        staffForm.role === "admin" ||
+                        staffForm.role === "staff")
+                    ) {
+                      const legacyLabel =
+                        staffForm.role === "owner"
+                          ? ar
+                            ? "مالك"
+                            : "Owner"
+                          : staffForm.role === "admin"
+                            ? ar
+                              ? "مشرف (قديم)"
+                              : "Admin (legacy)"
+                            : ar
+                              ? "موظف (قديم)"
+                              : "Staff (legacy)";
+                      options.unshift({ value: staffForm.role, label: legacyLabel });
+                    }
+                    return options.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ));
+                  })()}
                 </select>
               </Field>
               <Field label={ar ? "الاسم بالعربية" : "Arabic name"}>
@@ -474,7 +544,7 @@ export function OperationsPanel({ businessId, ar }: { businessId: string; ar: bo
                 <button
                   key={member.id}
                   type="button"
-                  disabled={!canManage}
+                  disabled={!canManageBiz}
                   className="flex w-full items-center justify-between rounded-lg border p-3 text-start disabled:cursor-default"
                   onClick={() =>
                     setStaffForm({
@@ -516,7 +586,7 @@ export function OperationsPanel({ businessId, ar }: { businessId: string; ar: bo
 
       <section className="panel p-5">
         <h3 className="font-semibold">{ar ? "تكليفات الفروع" : "Branch assignments"}</h3>
-        {canManage ? (
+        {canManageBiz ? (
           <div className="mt-3 flex flex-wrap gap-2">
             <select
               className="h-10 min-w-48 rounded-md border border-input bg-background px-3 text-sm"
@@ -564,7 +634,7 @@ export function OperationsPanel({ businessId, ar }: { businessId: string; ar: bo
                   ? branchById.get(item.branch_id)?.name_ar
                   : branchById.get(item.branch_id)?.name_en}
               </span>
-              {canManage ? (
+              {canManageBiz ? (
                 <button
                   type="button"
                   className="text-destructive"
@@ -587,6 +657,9 @@ export function OperationsPanel({ businessId, ar }: { businessId: string; ar: bo
           {data.sessions.length ? (
             data.sessions.map((session) => {
               const active = !session.revoked_at && new Date(session.expires_at) > new Date();
+              const canRevoke =
+                canManageBiz ||
+                (session.branch_id ? userCanManageBranch(session.branch_id) : false);
               return (
                 <div
                   key={session.id}
@@ -615,7 +688,7 @@ export function OperationsPanel({ businessId, ar }: { businessId: string; ar: bo
                           ? "منتهية / ملغاة"
                           : "expired / revoked"}
                     </Badge>
-                    {canManage && active ? (
+                    {active && canRevoke ? (
                       <Button
                         type="button"
                         size="sm"

@@ -31,8 +31,10 @@ import {
   LogOut,
   QrCode,
   ShieldAlert,
+  Store,
   Trash2,
 } from "lucide-react";
+import { isOwner, isManager, isCashier, type OperationsAccess } from "@/lib/access";
 
 export const Route = createFileRoute("/dashboard")({
   head: () => ({
@@ -230,6 +232,35 @@ function MerchantDashboard() {
       d60: automationQuery.data.inactive_60_enabled,
     });
   }, [automationQuery.data]);
+
+  const accessQuery = useQuery({
+    queryKey: ["dashboard-access", business?.id, user?.id],
+    enabled: Boolean(business?.id) && Boolean(user?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .rpc("operations_access", { _business_id: business!.id })
+        .single();
+      if (error) throw error;
+      return data as OperationsAccess;
+    },
+  });
+
+  const operationalRole = accessQuery.data?.operational_role;
+  const isOwnerUser = isOwner(operationalRole);
+  const isCashierUser = isCashier(operationalRole);
+
+  useEffect(() => {
+    if (
+      accessQuery.isSuccess &&
+      !isOwnerUser &&
+      (activeTab === "designer" ||
+        activeTab === "pin" ||
+        activeTab === "geo" ||
+        activeTab === "push")
+    ) {
+      setActiveTab("overview");
+    }
+  }, [accessQuery.isSuccess, isOwnerUser, activeTab]);
 
   const fg = useMemo(() => autoContrast(design.background), [design.background]);
   function applyProgram(next: ProgramType) {
@@ -469,6 +500,30 @@ function MerchantDashboard() {
     );
   }
 
+  if (accessQuery.isSuccess && isCashierUser) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-background px-4">
+        <div className="panel max-w-md p-6 text-center">
+          <Store className="mx-auto size-9 text-primary" />
+          <h1 className="mt-4 text-xl font-bold">{ar ? "حساب كاشير" : "Cashier Account"}</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            {ar
+              ? "هذا الحساب مخصص للكاشير. يرجى التوجه إلى شاشة الكاشير لمسح وإضافة الأختام."
+              : "This account is registered as a cashier. Please use the cashier terminal to scan passes."}
+          </p>
+          <div className="mt-5 flex justify-center gap-3">
+            <Button asChild>
+              <a href="/scan">{ar ? "فتح شاشة الكاشير" : "Open Cashier Terminal"}</a>
+            </Button>
+            <Button variant="outline" onClick={() => supabase.auth.signOut()}>
+              {ar ? "تسجيل الخروج" : "Sign out"}
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen">
       {showResetPassword && (
@@ -575,14 +630,22 @@ function MerchantDashboard() {
               <LayoutDashboard className="me-1.5 size-4" />
               {ar ? "الرئيسية (مركز التحكم)" : "Main Overview"}
             </TabsTrigger>
-            <TabsTrigger value="designer">
-              <Edit3 className="me-1.5 size-4" />
-              {t("passDesigner")}
-            </TabsTrigger>
-            <TabsTrigger value="pin">{t("pinManager")}</TabsTrigger>
+            {isOwnerUser ? (
+              <>
+                <TabsTrigger value="designer">
+                  <Edit3 className="me-1.5 size-4" />
+                  {t("passDesigner")}
+                </TabsTrigger>
+                <TabsTrigger value="pin">{t("pinManager")}</TabsTrigger>
+              </>
+            ) : null}
             <TabsTrigger value="operations">{ar ? "العمليات والفروع" : "Operations"}</TabsTrigger>
-            <TabsTrigger value="geo">{t("geofence")}</TabsTrigger>
-            <TabsTrigger value="push">{t("campaigns")}</TabsTrigger>
+            {isOwnerUser ? (
+              <>
+                <TabsTrigger value="geo">{t("geofence")}</TabsTrigger>
+                <TabsTrigger value="push">{t("campaigns")}</TabsTrigger>
+              </>
+            ) : null}
             <TabsTrigger value="analytics">{t("analytics")}</TabsTrigger>
           </TabsList>
 
@@ -610,16 +673,18 @@ function MerchantDashboard() {
               </div>
 
               {/* Quick Action Buttons */}
-              <div className="flex flex-wrap gap-3 lg:justify-end">
-                <Button variant="default" onClick={() => setActiveTab("designer")}>
-                  <Edit3 className="me-2 size-4" />
-                  {ar ? "تعديل تصميم البطاقة" : "Edit Pass Design"}
-                </Button>
-                <Button variant="destructive" onClick={() => setShowDeleteModal(true)}>
-                  <Trash2 className="me-2 size-4" />
-                  {ar ? "حذف / إعادة ضبط الحملة" : "Delete / Reset Campaign"}
-                </Button>
-              </div>
+              {isOwnerUser ? (
+                <div className="flex flex-wrap gap-3 lg:justify-end">
+                  <Button variant="default" onClick={() => setActiveTab("designer")}>
+                    <Edit3 className="me-2 size-4" />
+                    {ar ? "تعديل تصميم البطاقة" : "Edit Pass Design"}
+                  </Button>
+                  <Button variant="destructive" onClick={() => setShowDeleteModal(true)}>
+                    <Trash2 className="me-2 size-4" />
+                    {ar ? "حذف / إعادة ضبط الحملة" : "Delete / Reset Campaign"}
+                  </Button>
+                </div>
+              ) : null}
             </div>
 
             {/* Sharing & QR Code Section */}
@@ -688,10 +753,12 @@ function MerchantDashboard() {
                 <h3 className="font-bold text-lg">
                   {ar ? "معاينة البطاقة الحالية" : "Current Pass Preview"}
                 </h3>
-                <Button size="sm" variant="outline" onClick={() => setActiveTab("designer")}>
-                  <Edit3 className="me-1.5 size-3.5" />
-                  {ar ? "تعديل" : "Edit"}
-                </Button>
+                {isOwnerUser ? (
+                  <Button size="sm" variant="outline" onClick={() => setActiveTab("designer")}>
+                    <Edit3 className="me-1.5 size-3.5" />
+                    {ar ? "تعديل" : "Edit"}
+                  </Button>
+                ) : null}
               </div>
               <div className="grid place-items-center py-4">
                 <PassPreview design={design} locale={locale} />
@@ -700,333 +767,349 @@ function MerchantDashboard() {
           </TabsContent>
 
           {/* Pass designer */}
-          <TabsContent
-            value="designer"
-            className="mt-4 grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]"
-          >
-            <div className="panel space-y-5 p-6">
-              <div>
-                <Label className="mb-2 block">{t("programs")}</Label>
-                <div className="flex flex-wrap gap-2">
-                  {(["stamp", "points", "coupon_morph"] as ProgramType[]).map((p) => (
-                    <Button
-                      key={p}
-                      size="sm"
-                      variant={program === p ? "default" : "outline"}
-                      onClick={() => applyProgram(p)}
-                    >
-                      {ar ? PASS_TEMPLATES[p].name.ar : PASS_TEMPLATES[p].name.en}
-                    </Button>
-                  ))}
-                </div>
-                {program === "coupon_morph" ? (
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    {ar
-                      ? "تُستهلك قسيمة الخصم عند أول استبدال ناجح، ثم تصبح بطاقة أختام دائمة."
-                      : "The introductory coupon is consumed on its first valid redemption, then becomes a permanent stamp card."}
+          {isOwnerUser ? (
+            <>
+              <TabsContent
+                value="designer"
+                className="mt-4 grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]"
+              >
+                <div className="panel space-y-5 p-6">
+                  <div>
+                    <Label className="mb-2 block">{t("programs")}</Label>
+                    <div className="flex flex-wrap gap-2">
+                      {(["stamp", "points", "coupon_morph"] as ProgramType[]).map((p) => (
+                        <Button
+                          key={p}
+                          size="sm"
+                          variant={program === p ? "default" : "outline"}
+                          onClick={() => applyProgram(p)}
+                        >
+                          {ar ? PASS_TEMPLATES[p].name.ar : PASS_TEMPLATES[p].name.en}
+                        </Button>
+                      ))}
+                    </div>
+                    {program === "coupon_morph" ? (
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        {ar
+                          ? "تُستهلك قسيمة الخصم عند أول استبدال ناجح، ثم تصبح بطاقة أختام دائمة."
+                          : "The introductory coupon is consumed on its first valid redemption, then becomes a permanent stamp card."}
+                      </p>
+                    ) : null}
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <Label htmlFor="nameAr">
+                        {ar ? "اسم المنشأة (عربي)" : "Business name (AR)"}
+                      </Label>
+                      <Input
+                        id="nameAr"
+                        value={design.businessName}
+                        onChange={(e) => setDesign({ ...design, businessName: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="nameEn">
+                        {ar ? "اسم المنشأة (إنجليزي)" : "Business name (EN)"}
+                      </Label>
+                      <Input
+                        id="nameEn"
+                        value={design.businessNameEn}
+                        onChange={(e) => setDesign({ ...design, businessNameEn: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="headAr">{ar ? "نص البطاقة (عربي)" : "Pass text (AR)"}</Label>
+                      <Input
+                        id="headAr"
+                        value={design.headline}
+                        onChange={(e) => setDesign({ ...design, headline: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="headEn">
+                        {ar ? "نص البطاقة (إنجليزي)" : "Pass text (EN)"}
+                      </Label>
+                      <Input
+                        id="headEn"
+                        value={design.headlineEn}
+                        onChange={(e) => setDesign({ ...design, headlineEn: e.target.value })}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <Label htmlFor="bg">{ar ? "لون الخلفية" : "Background color"}</Label>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          id="bg"
+                          type="color"
+                          className="h-10 w-16 p-1"
+                          value={design.background}
+                          onChange={(e) => setDesign({ ...design, background: e.target.value })}
+                        />
+                        <Badge variant="secondary">
+                          {ar ? "تباين تلقائي:" : "Auto contrast:"} {fg}
+                        </Badge>
+                      </div>
+                    </div>
+                    <div>
+                      <Label htmlFor="ac">{ar ? "لون التمييز" : "Accent color"}</Label>
+                      <Input
+                        id="ac"
+                        type="color"
+                        className="h-10 w-16 p-1"
+                        value={design.accent}
+                        onChange={(e) => setDesign({ ...design, accent: e.target.value })}
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <Label htmlFor="logo">{ar ? "شعار المنشأة" : "Brand logo"}</Label>
+                    <Input
+                      id="logo"
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => onLogo(e.target.files?.[0])}
+                    />
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {ar ? "يتم تحجيم الشعار تلقائياً إلى 40×40" : "Logo auto-resized to 40×40"}
+                    </p>
+                  </div>
+
+                  {program === "points" ? (
+                    <div className="space-y-4">
+                      <div>
+                        <Label>
+                          {ar
+                            ? `ريال لكل نقطة: ${design.sarPerPoint}`
+                            : `SAR per point: ${design.sarPerPoint}`}
+                        </Label>
+                        <Slider
+                          min={1}
+                          max={50}
+                          step={1}
+                          value={[design.sarPerPoint]}
+                          onValueChange={([v]) => setDesign({ ...design, sarPerPoint: v ?? 10 })}
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor="pointsPerReward">
+                          {ar ? "النقاط المطلوبة للمكافأة" : "Points required per reward"}
+                        </Label>
+                        <Input
+                          id="pointsPerReward"
+                          type="number"
+                          min={1}
+                          step={1}
+                          value={design.pointsPerReward}
+                          onChange={(e) =>
+                            setDesign({ ...design, pointsPerReward: Number(e.target.value) })
+                          }
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <Label>
+                        {ar
+                          ? `عدد الأختام المطلوبة: ${design.targetStamps}`
+                          : `Target stamps: ${design.targetStamps}`}
+                      </Label>
+                      <Slider
+                        min={3}
+                        max={12}
+                        step={1}
+                        value={[design.targetStamps]}
+                        onValueChange={([v]) => setDesign({ ...design, targetStamps: v ?? 9 })}
+                      />
+                    </div>
+                  )}
+
+                  <Button onClick={saveDesign} disabled={saving}>
+                    {saving ? <Loader2 className="size-4 animate-spin" /> : t("save")}
+                  </Button>
+                  <p className="text-xs text-muted-foreground">
+                    {ar ? "قالب مرجعي:" : "Template:"} <code>{tpl.id}</code>
                   </p>
-                ) : null}
-              </div>
+                </div>
 
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <Label htmlFor="nameAr">{ar ? "اسم المنشأة (عربي)" : "Business name (AR)"}</Label>
-                  <Input
-                    id="nameAr"
-                    value={design.businessName}
-                    onChange={(e) => setDesign({ ...design, businessName: e.target.value })}
-                  />
+                <div className="panel p-6">
+                  <h2 className="mb-4 text-lg font-semibold">
+                    {ar ? "معاينة حية مزدوجة" : "Live dual preview"}
+                  </h2>
+                  <PassPreview design={design} locale={locale} />
                 </div>
-                <div>
-                  <Label htmlFor="nameEn">
-                    {ar ? "اسم المنشأة (إنجليزي)" : "Business name (EN)"}
-                  </Label>
-                  <Input
-                    id="nameEn"
-                    value={design.businessNameEn}
-                    onChange={(e) => setDesign({ ...design, businessNameEn: e.target.value })}
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="headAr">{ar ? "نص البطاقة (عربي)" : "Pass text (AR)"}</Label>
-                  <Input
-                    id="headAr"
-                    value={design.headline}
-                    onChange={(e) => setDesign({ ...design, headline: e.target.value })}
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="headEn">{ar ? "نص البطاقة (إنجليزي)" : "Pass text (EN)"}</Label>
-                  <Input
-                    id="headEn"
-                    value={design.headlineEn}
-                    onChange={(e) => setDesign({ ...design, headlineEn: e.target.value })}
-                  />
-                </div>
-              </div>
+              </TabsContent>
 
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <Label htmlFor="bg">{ar ? "لون الخلفية" : "Background color"}</Label>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      id="bg"
-                      type="color"
-                      className="h-10 w-16 p-1"
-                      value={design.background}
-                      onChange={(e) => setDesign({ ...design, background: e.target.value })}
-                    />
-                    <Badge variant="secondary">
-                      {ar ? "تباين تلقائي:" : "Auto contrast:"} {fg}
-                    </Badge>
-                  </div>
-                </div>
-                <div>
-                  <Label htmlFor="ac">{ar ? "لون التمييز" : "Accent color"}</Label>
-                  <Input
-                    id="ac"
-                    type="color"
-                    className="h-10 w-16 p-1"
-                    value={design.accent}
-                    onChange={(e) => setDesign({ ...design, accent: e.target.value })}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <Label htmlFor="logo">{ar ? "شعار المنشأة" : "Brand logo"}</Label>
+              {/* PIN */}
+              <TabsContent value="pin" className="panel mt-4 max-w-md space-y-4 p-6">
+                <Label htmlFor="pin">
+                  {ar ? "رمز الكاشير المكون من ٤ أرقام" : "4-digit cashier PIN"}
+                </Label>
                 <Input
-                  id="logo"
-                  type="file"
-                  accept="image/*"
-                  onChange={(e) => onLogo(e.target.files?.[0])}
+                  id="pin"
+                  inputMode="numeric"
+                  maxLength={4}
+                  value={pin}
+                  onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                  className="w-32 text-center text-2xl tracking-[0.5em]"
                 />
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {ar ? "يتم تحجيم الشعار تلقائياً إلى 40×40" : "Logo auto-resized to 40×40"}
+                <Button
+                  disabled={pin.length !== 4 || saving}
+                  onClick={async () => {
+                    if (
+                      await updateBusiness(
+                        { cashier_pin: pin },
+                        ar ? "تم تحديث رمز الكاشير" : "Cashier PIN updated",
+                      )
+                    )
+                      setPin("");
+                  }}
+                >
+                  {t("save")}
+                </Button>
+                <p className="text-sm text-muted-foreground">
+                  {ar
+                    ? "يستخدم موظفو الفرع هذا الرمز لفتح شاشة الماسح /scan"
+                    : "Store staff use this PIN to unlock the /scan terminal"}
                 </p>
-              </div>
-
-              {program === "points" ? (
-                <div className="space-y-4">
-                  <div>
-                    <Label>
-                      {ar
-                        ? `ريال لكل نقطة: ${design.sarPerPoint}`
-                        : `SAR per point: ${design.sarPerPoint}`}
-                    </Label>
-                    <Slider
-                      min={1}
-                      max={50}
-                      step={1}
-                      value={[design.sarPerPoint]}
-                      onValueChange={([v]) => setDesign({ ...design, sarPerPoint: v ?? 10 })}
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="pointsPerReward">
-                      {ar ? "النقاط المطلوبة للمكافأة" : "Points required per reward"}
-                    </Label>
-                    <Input
-                      id="pointsPerReward"
-                      type="number"
-                      min={1}
-                      step={1}
-                      value={design.pointsPerReward}
-                      onChange={(e) =>
-                        setDesign({ ...design, pointsPerReward: Number(e.target.value) })
-                      }
-                    />
-                  </div>
-                </div>
-              ) : (
-                <div>
-                  <Label>
-                    {ar
-                      ? `عدد الأختام المطلوبة: ${design.targetStamps}`
-                      : `Target stamps: ${design.targetStamps}`}
-                  </Label>
-                  <Slider
-                    min={3}
-                    max={12}
-                    step={1}
-                    value={[design.targetStamps]}
-                    onValueChange={([v]) => setDesign({ ...design, targetStamps: v ?? 9 })}
-                  />
-                </div>
-              )}
-
-              <Button onClick={saveDesign} disabled={saving}>
-                {saving ? <Loader2 className="size-4 animate-spin" /> : t("save")}
-              </Button>
-              <p className="text-xs text-muted-foreground">
-                {ar ? "قالب مرجعي:" : "Template:"} <code>{tpl.id}</code>
-              </p>
-            </div>
-
-            <div className="panel p-6">
-              <h2 className="mb-4 text-lg font-semibold">
-                {ar ? "معاينة حية مزدوجة" : "Live dual preview"}
-              </h2>
-              <PassPreview design={design} locale={locale} />
-            </div>
-          </TabsContent>
-
-          {/* PIN */}
-          <TabsContent value="pin" className="panel mt-4 max-w-md space-y-4 p-6">
-            <Label htmlFor="pin">
-              {ar ? "رمز الكاشير المكون من ٤ أرقام" : "4-digit cashier PIN"}
-            </Label>
-            <Input
-              id="pin"
-              inputMode="numeric"
-              maxLength={4}
-              value={pin}
-              onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
-              className="w-32 text-center text-2xl tracking-[0.5em]"
-            />
-            <Button
-              disabled={pin.length !== 4 || saving}
-              onClick={async () => {
-                if (
-                  await updateBusiness(
-                    { cashier_pin: pin },
-                    ar ? "تم تحديث رمز الكاشير" : "Cashier PIN updated",
-                  )
-                )
-                  setPin("");
-              }}
-            >
-              {t("save")}
-            </Button>
-            <p className="text-sm text-muted-foreground">
-              {ar
-                ? "يستخدم موظفو الفرع هذا الرمز لفتح شاشة الماسح /scan"
-                : "Store staff use this PIN to unlock the /scan terminal"}
-            </p>
-          </TabsContent>
+              </TabsContent>
+            </>
+          ) : null}
 
           <TabsContent value="operations" className="mt-4">
             <OperationsPanel businessId={business.id} ar={ar} />
           </TabsContent>
 
           {/* Geofence */}
-          <TabsContent value="geo" className="mt-4 grid gap-6 lg:grid-cols-2">
-            <div className="panel space-y-4 p-6">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <Label htmlFor="lat">{ar ? "خط العرض" : "Latitude"}</Label>
-                  <Input id="lat" value={lat} onChange={(e) => setLat(e.target.value)} />
-                </div>
-                <div>
-                  <Label htmlFor="lng">{ar ? "خط الطول" : "Longitude"}</Label>
-                  <Input id="lng" value={lng} onChange={(e) => setLng(e.target.value)} />
-                </div>
-              </div>
-              <div>
-                <Label htmlFor="gAr">{ar ? "نص التنبيه (عربي)" : "Proximity text (AR)"}</Label>
-                <Textarea
-                  id="gAr"
-                  value={geoAr}
-                  onChange={(e) => setGeoAr(e.target.value)}
-                  dir="rtl"
-                />
-              </div>
-              <div>
-                <Label htmlFor="gEn">{ar ? "نص التنبيه (إنجليزي)" : "Proximity text (EN)"}</Label>
-                <Textarea
-                  id="gEn"
-                  value={geoEn}
-                  onChange={(e) => setGeoEn(e.target.value)}
-                  dir="ltr"
-                />
-              </div>
-              <Button
-                disabled={saving}
-                onClick={() =>
-                  updateBusiness(
-                    {
-                      latitude: lat ? Number(lat) : null,
-                      longitude: lng ? Number(lng) : null,
-                      geo_text_ar: geoAr,
-                      geo_text_en: geoEn,
-                    },
-                    ar ? "تم حفظ الموقع" : "Location saved",
-                  )
-                }
-              >
-                {saving ? <Loader2 className="size-4 animate-spin" /> : t("save")}
-              </Button>
-            </div>
-            <div className="panel overflow-hidden">
-              <iframe
-                title="map"
-                className="h-full min-h-80 w-full border-0"
-                src={`https://www.openstreetmap.org/export/embed.html?bbox=${Number(lng) - 0.01}%2C${Number(lat) - 0.01}%2C${Number(lng) + 0.01}%2C${Number(lat) + 0.01}&layer=mapnik&marker=${lat}%2C${lng}`}
-              />
-            </div>
-          </TabsContent>
-
-          {/* Push */}
-          <TabsContent value="push" className="mt-4 grid gap-6 lg:grid-cols-2">
-            <div className="panel space-y-4 p-6">
-              <h2 className="text-lg font-semibold">{ar ? "حملة فورية" : "Instant broadcast"}</h2>
-              <div>
-                <Label htmlFor="pAr">{ar ? "نص الإشعار (عربي)" : "Message (AR)"}</Label>
-                <Textarea
-                  id="pAr"
-                  value={pushAr}
-                  onChange={(e) => setPushAr(e.target.value)}
-                  dir="rtl"
-                />
-              </div>
-              <div>
-                <Label htmlFor="pEn">{ar ? "نص الإشعار (إنجليزي)" : "Message (EN)"}</Label>
-                <Textarea
-                  id="pEn"
-                  value={pushEn}
-                  onChange={(e) => setPushEn(e.target.value)}
-                  dir="ltr"
-                />
-              </div>
-              <Button disabled={sending} onClick={() => broadcast("all")}>
-                {sending ? "…" : t("send")}
-              </Button>
-            </div>
-
-            <div className="panel space-y-4 p-6">
-              <h2 className="text-lg font-semibold">
-                {ar ? "تذكيرات الخمول التلقائية" : "Automated inactivity reminders"}
-              </h2>
-              {(
-                [
-                  ["d14", 14, "inactive_14"],
-                  ["d30", 30, "inactive_30"],
-                  ["d60", 60, "inactive_60"],
-                ] as const
-              ).map(([key, days, segment]) => (
-                <div
-                  key={key}
-                  className="flex items-center justify-between rounded-lg border border-border p-3"
-                >
-                  <div>
-                    <p className="font-medium">
-                      {ar ? `بعد ${days} يوماً من الخمول` : `After ${days} days inactive`}
-                    </p>
-                    <button
-                      className="text-xs text-primary underline"
-                      onClick={() => broadcast(segment)}
-                    >
-                      {ar ? "إرسال تجريبي الآن" : "Send test now"}
-                    </button>
+          {isOwnerUser ? (
+            <>
+              <TabsContent value="geo" className="mt-4 grid gap-6 lg:grid-cols-2">
+                <div className="panel space-y-4 p-6">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <Label htmlFor="lat">{ar ? "خط العرض" : "Latitude"}</Label>
+                      <Input id="lat" value={lat} onChange={(e) => setLat(e.target.value)} />
+                    </div>
+                    <div>
+                      <Label htmlFor="lng">{ar ? "خط الطول" : "Longitude"}</Label>
+                      <Input id="lng" value={lng} onChange={(e) => setLng(e.target.value)} />
+                    </div>
                   </div>
-                  <Switch
-                    checked={reminders[key]}
-                    onCheckedChange={(value) => saveReminder(key, value)}
+                  <div>
+                    <Label htmlFor="gAr">{ar ? "نص التنبيه (عربي)" : "Proximity text (AR)"}</Label>
+                    <Textarea
+                      id="gAr"
+                      value={geoAr}
+                      onChange={(e) => setGeoAr(e.target.value)}
+                      dir="rtl"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="gEn">
+                      {ar ? "نص التنبيه (إنجليزي)" : "Proximity text (EN)"}
+                    </Label>
+                    <Textarea
+                      id="gEn"
+                      value={geoEn}
+                      onChange={(e) => setGeoEn(e.target.value)}
+                      dir="ltr"
+                    />
+                  </div>
+                  <Button
+                    disabled={saving}
+                    onClick={() =>
+                      updateBusiness(
+                        {
+                          latitude: lat ? Number(lat) : null,
+                          longitude: lng ? Number(lng) : null,
+                          geo_text_ar: geoAr,
+                          geo_text_en: geoEn,
+                        },
+                        ar ? "تم حفظ الموقع" : "Location saved",
+                      )
+                    }
+                  >
+                    {saving ? <Loader2 className="size-4 animate-spin" /> : t("save")}
+                  </Button>
+                </div>
+                <div className="panel overflow-hidden">
+                  <iframe
+                    title="map"
+                    className="h-full min-h-80 w-full border-0"
+                    src={`https://www.openstreetmap.org/export/embed.html?bbox=${Number(lng) - 0.01}%2C${Number(lat) - 0.01}%2C${Number(lng) + 0.01}%2C${Number(lat) + 0.01}&layer=mapnik&marker=${lat}%2C${lng}`}
                   />
                 </div>
-              ))}
-            </div>
-          </TabsContent>
+              </TabsContent>
+
+              {/* Push */}
+              <TabsContent value="push" className="mt-4 grid gap-6 lg:grid-cols-2">
+                <div className="panel space-y-4 p-6">
+                  <h2 className="text-lg font-semibold">
+                    {ar ? "حملة فورية" : "Instant broadcast"}
+                  </h2>
+                  <div>
+                    <Label htmlFor="pAr">{ar ? "نص الإشعار (عربي)" : "Message (AR)"}</Label>
+                    <Textarea
+                      id="pAr"
+                      value={pushAr}
+                      onChange={(e) => setPushAr(e.target.value)}
+                      dir="rtl"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="pEn">{ar ? "نص الإشعار (إنجليزي)" : "Message (EN)"}</Label>
+                    <Textarea
+                      id="pEn"
+                      value={pushEn}
+                      onChange={(e) => setPushEn(e.target.value)}
+                      dir="ltr"
+                    />
+                  </div>
+                  <Button disabled={sending} onClick={() => broadcast("all")}>
+                    {sending ? "…" : t("send")}
+                  </Button>
+                </div>
+
+                <div className="panel space-y-4 p-6">
+                  <h2 className="text-lg font-semibold">
+                    {ar ? "تذكيرات الخمول التلقائية" : "Automated inactivity reminders"}
+                  </h2>
+                  {(
+                    [
+                      ["d14", 14, "inactive_14"],
+                      ["d30", 30, "inactive_30"],
+                      ["d60", 60, "inactive_60"],
+                    ] as const
+                  ).map(([key, days, segment]) => (
+                    <div
+                      key={key}
+                      className="flex items-center justify-between rounded-lg border border-border p-3"
+                    >
+                      <div>
+                        <p className="font-medium">
+                          {ar ? `بعد ${days} يوماً من الخمول` : `After ${days} days inactive`}
+                        </p>
+                        <button
+                          className="text-xs text-primary underline"
+                          onClick={() => broadcast(segment)}
+                        >
+                          {ar ? "إرسال تجريبي الآن" : "Send test now"}
+                        </button>
+                      </div>
+                      <Switch
+                        checked={reminders[key]}
+                        onCheckedChange={(value) => saveReminder(key, value)}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </TabsContent>
+            </>
+          ) : null}
 
           {/* Analytics */}
           <TabsContent value="analytics" className="mt-4">

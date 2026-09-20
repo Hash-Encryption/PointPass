@@ -12,7 +12,7 @@ const createBusinessSchema = z.object({
     .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
   nameAr: z.string().trim().min(2).max(120),
   nameEn: z.string().trim().min(2).max(120),
-  plan: z.enum(["starter", "growth", "enterprise"]),
+  plan: z.enum(["starter", "growth", "enterprise", "single_location", "multi_location"]),
 });
 
 export const inviteMerchantAndCreateBusiness = createServerFn({ method: "POST" })
