@@ -42,6 +42,18 @@ export const strings = {
   redeem: { ar: "استبدال المكافأة", en: "Redeem Reward" },
   enterPin: { ar: "أدخل رمز الكاشير", en: "Enter cashier PIN" },
   scanNow: { ar: "امسح بطاقة العميل", en: "Scan customer pass" },
+  locationsAndTeam: { ar: "الفروع والفريق", en: "Locations & Team" },
+  locations: { ar: "الفروع", en: "Locations" },
+  team: { ar: "الفريق", en: "Team" },
+  devices: { ar: "الأجهزة", en: "Devices" },
+  manager: { ar: "مدير", en: "Manager" },
+  cashier: { ar: "كاشير", en: "Cashier" },
+  assignedLocations: { ar: "الفروع المعيّنة", en: "Assigned Locations" },
+  addLocation: { ar: "إضافة فرع", en: "Add Location" },
+  addTeamMember: { ar: "إضافة عضو للفريق", en: "Add Team Member" },
+  mainLocation: { ar: "الفرع الرئيسي", en: "Main Location" },
+  active: { ar: "نشط", en: "Active" },
+  inactive: { ar: "غير نشط", en: "Inactive" },
 } satisfies Dict;
 
 type Ctx = {
@@ -72,9 +84,7 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
   const toggle = useCallback(() => setLocale((l) => (l === "ar" ? "en" : "ar")), []);
 
   return (
-    <LocaleContext.Provider
-      value={{ locale, dir: locale === "ar" ? "rtl" : "ltr", t, toggle }}
-    >
+    <LocaleContext.Provider value={{ locale, dir: locale === "ar" ? "rtl" : "ltr", t, toggle }}>
       {children}
     </LocaleContext.Provider>
   );

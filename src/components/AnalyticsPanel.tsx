@@ -205,7 +205,15 @@ function activityDelta(item: RecentActivity, locale: "ar" | "en") {
   return parts.join(" · ") || copy[locale].noActivity;
 }
 
-export function AnalyticsPanel({ businessId, ar }: { businessId: string; ar: boolean }) {
+export function AnalyticsPanel({
+  businessId,
+  ar,
+  lockedBranchId,
+}: {
+  businessId: string;
+  ar: boolean;
+  lockedBranchId?: string;
+}) {
   const locale = ar ? "ar" : "en";
   const text = copy[locale];
   const today = dateInput(new Date());
@@ -213,10 +221,12 @@ export function AnalyticsPanel({ businessId, ar }: { businessId: string; ar: boo
   initialFrom.setDate(initialFrom.getDate() - 29);
   const [dateFrom, setDateFrom] = useState(dateInput(initialFrom));
   const [dateTo, setDateTo] = useState(today);
-  const [branchId, setBranchId] = useState("");
+  const [branchId, setBranchId] = useState(lockedBranchId ?? "");
   const [staffId, setStaffId] = useState("");
   const [program, setProgram] = useState("");
   const [action, setAction] = useState("");
+
+  const effectiveBranchId = lockedBranchId || branchId;
 
   const query = useQuery({
     queryKey: [
@@ -224,7 +234,7 @@ export function AnalyticsPanel({ businessId, ar }: { businessId: string; ar: boo
       businessId,
       dateFrom,
       dateTo,
-      branchId,
+      effectiveBranchId,
       staffId,
       program,
       action,
@@ -235,7 +245,7 @@ export function AnalyticsPanel({ businessId, ar }: { businessId: string; ar: boo
         _business_id: businessId,
         _date_from: dateFrom,
         _date_to: dateTo,
-        _branch_id: branchId || null,
+        _branch_id: effectiveBranchId || null,
         _staff_id: staffId || null,
         _program_type: program || null,
         _action: action || null,
@@ -310,20 +320,22 @@ export function AnalyticsPanel({ businessId, ar }: { businessId: string; ar: boo
             onChange={(event) => setDateTo(event.target.value)}
           />
         </Filter>
-        <Filter label={text.branch}>
-          <select
-            className="h-10 w-full rounded-md border bg-background px-3 text-sm"
-            value={branchId}
-            onChange={(event) => setBranchId(event.target.value)}
-          >
-            <option value="">{text.all}</option>
-            {analytics?.filters.branches.map((item) => (
-              <option key={item.id} value={item.id}>
-                {ar ? item.nameAr : item.nameEn}
-              </option>
-            ))}
-          </select>
-        </Filter>
+        {!lockedBranchId ? (
+          <Filter label={text.branch}>
+            <select
+              className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+              value={branchId}
+              onChange={(event) => setBranchId(event.target.value)}
+            >
+              <option value="">{text.all}</option>
+              {analytics?.filters.branches.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {ar ? item.nameAr : item.nameEn}
+                </option>
+              ))}
+            </select>
+          </Filter>
+        ) : null}
         <Filter label={text.staff}>
           <select
             className="h-10 w-full rounded-md border bg-background px-3 text-sm"

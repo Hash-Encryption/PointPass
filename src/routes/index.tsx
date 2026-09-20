@@ -38,13 +38,17 @@ function Index() {
       to: "/dashboard",
       icon: LayoutDashboard,
       title: t("merchantPortal"),
-      desc: ar ? "لوحة تحكم المنشأة، مصمم البطاقة والحملات" : "Pass designer, campaigns, overview, analytics",
+      desc: ar
+        ? "لوحة تحكم المنشأة، مصمم البطاقة والحملات"
+        : "Pass designer, campaigns, overview, analytics",
     },
     {
       to: "/scan",
       icon: ScanLine,
       title: t("cashierPortal"),
-      desc: ar ? "شاشة الكاشير لمسح وإضافة الأختام برمز المطعم" : "PIN-locked POS scanner for your restaurant",
+      desc: ar
+        ? "شاشة الكاشير لمسح وإضافة الأختام برمز المطعم"
+        : "PIN-locked POS scanner for your restaurant",
     },
   ];
 

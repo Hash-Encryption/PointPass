@@ -17,18 +17,9 @@ const panel = readFileSync(
   new URL("../src/components/OperationsPanel.tsx", import.meta.url),
   "utf8",
 );
-const dashboard = readFileSync(
-  new URL("../src/routes/dashboard.tsx", import.meta.url),
-  "utf8",
-);
-const entitlements = readFileSync(
-  new URL("../src/lib/entitlements.ts", import.meta.url),
-  "utf8",
-);
-const access = readFileSync(
-  new URL("../src/lib/access.ts", import.meta.url),
-  "utf8",
-);
+const dashboard = readFileSync(new URL("../src/routes/dashboard.tsx", import.meta.url), "utf8");
+const entitlements = readFileSync(new URL("../src/lib/entitlements.ts", import.meta.url), "utf8");
+const access = readFileSync(new URL("../src/lib/access.ts", import.meta.url), "utf8");
 
 // 1. Automatic Main Location Architecture
 for (const required of [
@@ -64,7 +55,10 @@ for (const required of [
   "hashtext('branch_limit_' ||",
   "Location limit exceeded",
 ]) {
-  assert.ok(migrationFoundation.includes(required), `Missing Location Enforcement contract: ${required}`);
+  assert.ok(
+    migrationFoundation.includes(required),
+    `Missing Location Enforcement contract: ${required}`,
+  );
 }
 
 // 4. Anti-Recursion Security Definer Helper Architecture
@@ -77,7 +71,10 @@ for (const required of [
   "security definer",
   "set search_path = public",
 ]) {
-  assert.ok(migrationHardening.includes(required), `Missing Anti-Recursion Helper contract: ${required}`);
+  assert.ok(
+    migrationHardening.includes(required),
+    `Missing Anti-Recursion Helper contract: ${required}`,
+  );
 }
 
 // 5. Strict Manager & Cashier RLS Isolation
@@ -93,7 +90,10 @@ for (const required of [
   "on public.pass_transactions for select to authenticated",
   "using (public.user_can_access_transaction(auth.uid(), business_id, branch_id))",
 ]) {
-  assert.ok(migrationHardening.includes(required), `Missing Hardened RLS Policy contract: ${required}`);
+  assert.ok(
+    migrationHardening.includes(required),
+    `Missing Hardened RLS Policy contract: ${required}`,
+  );
 }
 
 // 6. Authoritative Backend Staff Role Creation Restrictions
@@ -102,7 +102,10 @@ for (const required of [
   "New staff members can only be created with manager or cashier roles",
   "Role can only be transitioned to manager or cashier",
 ]) {
-  assert.ok(migrationHardening.includes(required), `Missing Backend Staff Role Restriction contract: ${required}`);
+  assert.ok(
+    migrationHardening.includes(required),
+    `Missing Backend Staff Role Restriction contract: ${required}`,
+  );
 }
 
 // 7. Enhanced Operations Access RPC
@@ -111,16 +114,34 @@ for (const required of [
   "can_manage_business boolean",
   "managed_branch_ids uuid[]",
 ]) {
-  assert.ok(migrationFoundation.includes(required), `Missing operations_access contract: ${required}`);
+  assert.ok(
+    migrationFoundation.includes(required),
+    `Missing operations_access contract: ${required}`,
+  );
 }
 
 // 8. SQL Verification Suite Schema Integrity
 assert.ok(!testSuite.includes("is_active"), "Test suite must not reference fake is_active column");
-assert.ok(!testSuite.includes("deleted_at"), "Test suite must not reference fake deleted_at column");
-assert.ok(!testSuite.includes("businesses.name"), "Test suite must not reference fake businesses.name column");
-assert.ok(testSuite.includes("public.branches FORCE ROW LEVEL SECURITY"), "Test suite must enforce RLS testing");
-assert.ok(testSuite.includes("SET LOCAL ROLE authenticated"), "Test suite must execute tests under authenticated role");
-assert.ok(testSuite.includes("current_user <> 'authenticated'"), "Test suite must verify current_user is authenticated");
+assert.ok(
+  !testSuite.includes("deleted_at"),
+  "Test suite must not reference fake deleted_at column",
+);
+assert.ok(
+  !testSuite.includes("businesses.name"),
+  "Test suite must not reference fake businesses.name column",
+);
+assert.ok(
+  testSuite.includes("public.branches FORCE ROW LEVEL SECURITY"),
+  "Test suite must enforce RLS testing",
+);
+assert.ok(
+  testSuite.includes("SET LOCAL ROLE authenticated"),
+  "Test suite must execute tests under authenticated role",
+);
+assert.ok(
+  testSuite.includes("current_user <> 'authenticated'"),
+  "Test suite must verify current_user is authenticated",
+);
 assert.ok(testSuite.includes("RESET ROLE"), "Test suite must safely reset role");
 assert.ok(testSuite.includes("[TEST 1]"), "Test suite must include Test 1");
 assert.ok(testSuite.includes("[TEST 2]"), "Test suite must include Test 2");
@@ -133,7 +154,10 @@ assert.ok(testSuite.includes("[TEST 8]"), "Test suite must include Test 8");
 assert.ok(testSuite.includes("[TEST 9]"), "Test suite must include Test 9");
 
 // 9. Frontend Entitlements & Access Helpers
-assert.ok(entitlements.includes("CONFIGURED_MULTI_LIMIT = 10"), "Configured multi limit must be 10");
+assert.ok(
+  entitlements.includes("CONFIGURED_MULTI_LIMIT = 10"),
+  "Configured multi limit must be 10",
+);
 assert.ok(entitlements.includes("getLocationEntitlement"), "Must export getLocationEntitlement");
 assert.ok(entitlements.includes("canAddLocation"), "Must export canAddLocation");
 
@@ -170,13 +194,7 @@ assert.ok(
   dashboard.includes("isOwnerUser ? ("),
   "Dashboard must restrict owner-only tabs to owners",
 );
-assert.ok(
-  dashboard.includes("isCashierUser"),
-  "Dashboard must check cashier role",
-);
-assert.ok(
-  dashboard.includes("/scan"),
-  "Dashboard must direct cashier accounts to /scan",
-);
+assert.ok(dashboard.includes("isCashierUser"), "Dashboard must check cashier role");
+assert.ok(dashboard.includes("/scan"), "Dashboard must direct cashier accounts to /scan");
 
 console.log("All Phase 1 Role + Location Foundation & Hardening contract checks passed.");

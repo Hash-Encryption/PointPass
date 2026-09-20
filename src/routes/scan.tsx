@@ -47,21 +47,37 @@ function CashierTerminal() {
 
   const [slug, setSlug] = useState(() => {
     if (typeof window !== "undefined") {
+      const p = new URLSearchParams(window.location.search);
+      const s = p.get("slug");
+      if (s) return s.trim().toLowerCase();
       return localStorage.getItem("cashier_last_slug") ?? "";
     }
     return "";
   });
 
   const [pin, setPin] = useState("");
-  const [branchCode, setBranchCode] = useState(() =>
-    typeof window === "undefined" ? "" : (localStorage.getItem("cashier_last_branch") ?? ""),
-  );
-  const [staffCode, setStaffCode] = useState(() =>
-    typeof window === "undefined" ? "" : (localStorage.getItem("cashier_last_staff") ?? ""),
-  );
+  const [branchCode, setBranchCode] = useState(() => {
+    if (typeof window !== "undefined") {
+      const p = new URLSearchParams(window.location.search);
+      const b = p.get("branch");
+      if (b) return b.trim().toLowerCase();
+      return localStorage.getItem("cashier_last_branch") ?? "";
+    }
+    return "";
+  });
+  const [staffCode, setStaffCode] = useState(() => {
+    if (typeof window !== "undefined") {
+      const p = new URLSearchParams(window.location.search);
+      const st = p.get("staff");
+      if (st) return st.trim().toLowerCase();
+      return localStorage.getItem("cashier_last_staff") ?? "";
+    }
+    return "";
+  });
   const [deviceName, setDeviceName] = useState(() =>
     typeof window === "undefined" ? "" : (localStorage.getItem("cashier_device_name") ?? ""),
   );
+  const [showManualSetup, setShowManualSetup] = useState(false);
   const [authenticating, setAuthenticating] = useState(false);
   const [business, setBusiness] = useState<BusinessInfo | null>(null);
   const [cashierSession, setCashierSession] = useState<string | null>(null);
@@ -69,6 +85,18 @@ function CashierTerminal() {
   const [amount, setAmount] = useState("");
   const [scanning, setScanning] = useState(false);
   const scannerRef = useRef<{ stop: () => Promise<void>; clear: () => void } | null>(null);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const p = new URLSearchParams(window.location.search);
+      const s = p.get("slug");
+      const b = p.get("branch");
+      const st = p.get("staff");
+      if (s) setSlug(s.trim().toLowerCase());
+      if (b) setBranchCode(b.trim().toLowerCase());
+      if (st) setStaffCode(st.trim().toLowerCase());
+    }
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -250,54 +278,91 @@ function CashierTerminal() {
           </div>
 
           <div className="space-y-3 text-start">
-            <div>
-              <Label htmlFor="restaurant-slug" className="text-xs text-muted-foreground">
-                {ar ? "اسم المطعم/المنشأة (Slug)" : "Restaurant Slug"}
-              </Label>
-              <div className="relative mt-1">
-                <Store className="absolute start-3 top-3 size-4 text-muted-foreground" />
-                <Input
-                  id="restaurant-slug"
-                  placeholder="my-coffee-shop"
-                  value={slug}
-                  onChange={(e) => setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
-                  required
-                  dir="ltr"
-                  className="ps-9 border-white/20 bg-white/10 text-surface-dark-foreground"
-                />
+            {slug && branchCode && staffCode && !showManualSetup ? (
+              <div className="rounded-lg border border-white/20 bg-white/10 p-3 text-start flex items-center justify-between">
+                <div>
+                  <div className="text-xs text-white/70">
+                    {ar ? "محطة الكاشير المحددة" : "Configured Cashier Terminal"}
+                  </div>
+                  <div className="font-semibold text-white mt-0.5" dir="ltr">
+                    {slug} · {branchCode} / {staffCode}
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs text-white/70 hover:text-white"
+                  onClick={() => setShowManualSetup(true)}
+                >
+                  {ar ? "تعديل" : "Change"}
+                </Button>
               </div>
-            </div>
+            ) : (
+              <>
+                <div>
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="restaurant-slug" className="text-xs text-muted-foreground">
+                      {ar ? "اسم المطعم/المنشأة (Slug)" : "Restaurant Slug"}
+                    </Label>
+                    {slug && branchCode && staffCode && showManualSetup ? (
+                      <button
+                        type="button"
+                        className="text-xs text-primary underline"
+                        onClick={() => setShowManualSetup(false)}
+                      >
+                        {ar ? "إخفاء التفاصيل" : "Collapse details"}
+                      </button>
+                    ) : null}
+                  </div>
+                  <div className="relative mt-1">
+                    <Store className="absolute start-3 top-3 size-4 text-muted-foreground" />
+                    <Input
+                      id="restaurant-slug"
+                      placeholder="my-coffee-shop"
+                      value={slug}
+                      onChange={(e) =>
+                        setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))
+                      }
+                      required
+                      dir="ltr"
+                      className="ps-9 border-white/20 bg-white/10 text-surface-dark-foreground"
+                    />
+                  </div>
+                </div>
 
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <Label htmlFor="branch-code" className="text-xs text-muted-foreground">
-                  {ar ? "رمز الفرع" : "Branch code"}
-                </Label>
-                <Input
-                  id="branch-code"
-                  value={branchCode}
-                  onChange={(e) =>
-                    setBranchCode(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))
-                  }
-                  dir="ltr"
-                  className="mt-1 border-white/20 bg-white/10 text-surface-dark-foreground"
-                />
-              </div>
-              <div>
-                <Label htmlFor="staff-code" className="text-xs text-muted-foreground">
-                  {ar ? "رمز الموظف" : "Staff code"}
-                </Label>
-                <Input
-                  id="staff-code"
-                  value={staffCode}
-                  onChange={(e) =>
-                    setStaffCode(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))
-                  }
-                  dir="ltr"
-                  className="mt-1 border-white/20 bg-white/10 text-surface-dark-foreground"
-                />
-              </div>
-            </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <Label htmlFor="branch-code" className="text-xs text-muted-foreground">
+                      {ar ? "رمز الفرع" : "Branch code"}
+                    </Label>
+                    <Input
+                      id="branch-code"
+                      value={branchCode}
+                      onChange={(e) =>
+                        setBranchCode(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))
+                      }
+                      dir="ltr"
+                      className="mt-1 border-white/20 bg-white/10 text-surface-dark-foreground"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="staff-code" className="text-xs text-muted-foreground">
+                      {ar ? "رمز الموظف" : "Staff code"}
+                    </Label>
+                    <Input
+                      id="staff-code"
+                      value={staffCode}
+                      onChange={(e) =>
+                        setStaffCode(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))
+                      }
+                      dir="ltr"
+                      className="mt-1 border-white/20 bg-white/10 text-surface-dark-foreground"
+                    />
+                  </div>
+                </div>
+              </>
+            )}
 
             <div>
               <Label htmlFor="device-name" className="text-xs text-muted-foreground">

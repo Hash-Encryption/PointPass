@@ -22,6 +22,7 @@ import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import {
   AlertTriangle,
+  Building2,
   Copy,
   Download,
   Edit3,
@@ -631,15 +632,15 @@ function MerchantDashboard() {
               {ar ? "الرئيسية (مركز التحكم)" : "Main Overview"}
             </TabsTrigger>
             {isOwnerUser ? (
-              <>
-                <TabsTrigger value="designer">
-                  <Edit3 className="me-1.5 size-4" />
-                  {t("passDesigner")}
-                </TabsTrigger>
-                <TabsTrigger value="pin">{t("pinManager")}</TabsTrigger>
-              </>
+              <TabsTrigger value="designer">
+                <Edit3 className="me-1.5 size-4" />
+                {t("passDesigner")}
+              </TabsTrigger>
             ) : null}
-            <TabsTrigger value="operations">{ar ? "العمليات والفروع" : "Operations"}</TabsTrigger>
+            <TabsTrigger value="operations">
+              <Building2 className="me-1.5 size-4" />
+              {t("locationsAndTeam")}
+            </TabsTrigger>
             {isOwnerUser ? (
               <>
                 <TabsTrigger value="geo">{t("geofence")}</TabsTrigger>
