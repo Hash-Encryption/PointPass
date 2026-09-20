@@ -85,7 +85,7 @@ export function BusinessSetupStep({ onSuccess }: BusinessSetupStepProps) {
           slug: cleanSlug,
           nameAr: nameAr.trim(),
           nameEn: nameEn.trim(),
-          plan: "starter",
+          plan: "single_location",
         },
       });
 

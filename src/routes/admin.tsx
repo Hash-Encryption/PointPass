@@ -96,7 +96,7 @@ function AdminPortal() {
     slug: "",
     nameAr: "",
     nameEn: "",
-    plan: "starter",
+    plan: "single_location",
   });
 
   useEffect(() => {
@@ -206,12 +206,19 @@ function AdminPortal() {
           slug: newBusiness.slug.trim(),
           nameAr: newBusiness.nameAr.trim(),
           nameEn: newBusiness.nameEn.trim(),
-          plan: newBusiness.plan as "starter" | "growth" | "enterprise",
+          plan: newBusiness.plan as
+            "single_location" | "multi_location" | "starter" | "growth" | "enterprise",
         },
       });
     },
     onSuccess: async (result) => {
-      setNewBusiness({ merchantEmail: "", slug: "", nameAr: "", nameEn: "", plan: "starter" });
+      setNewBusiness({
+        merchantEmail: "",
+        slug: "",
+        nameAr: "",
+        nameEn: "",
+        plan: "single_location",
+      });
       await queryClient.invalidateQueries({ queryKey: ["tenants"] });
       toast.success(
         result.merchantLinked

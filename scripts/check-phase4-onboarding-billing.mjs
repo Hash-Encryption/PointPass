@@ -125,8 +125,16 @@ assert.ok(
   "Migration must create plans catalog table",
 );
 assert.ok(
+  plansLib.includes("single_location") && plansLib.includes("multi_location"),
+  "src/lib/plans.ts must export single_location and multi_location",
+);
+assert.ok(
   plansLib.includes("PLAN_CATALOG") && plansLib.includes("AVAILABLE_PLANS"),
   "src/lib/plans.ts must export centralized plan catalog",
+);
+assert.ok(
+  !plansLib.includes("PLAN_CATALOG.growth") && !plansLib.includes("PLAN_CATALOG.enterprise"),
+  "src/lib/plans.ts must not have growth or enterprise in AVAILABLE_PLANS",
 );
 
 // 9. No fabricated pricing, trials, or fake payment providers

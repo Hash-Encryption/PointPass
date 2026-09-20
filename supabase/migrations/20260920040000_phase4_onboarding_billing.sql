@@ -12,12 +12,11 @@ create table if not exists public.plans (
   created_at timestamptz not null default now()
 );
 
--- Authoritative plan catalog values (no fabricated pricing or free/trial flags)
+-- Authoritative operational plan catalog values (no fabricated commercial packaging)
 insert into public.plans (code, name_ar, name_en, is_active, max_locations)
 values
-  ('starter', 'الباقة الأساسية', 'Starter Plan', true, 1),
-  ('growth', 'باقة النمو', 'Growth Plan', true, 10),
-  ('enterprise', 'باقة المنشآت الكبرى', 'Enterprise Plan', true, 10)
+  ('single_location', 'فرع واحد', 'Single Location', true, 1),
+  ('multi_location', 'فروع متعددة', 'Multi-Location', true, 10)
 on conflict (code) do update set
   name_ar = excluded.name_ar,
   name_en = excluded.name_en,
@@ -121,9 +120,8 @@ insert into public.business_subscriptions (
 select
   b.id,
   case
-    when b.plan in ('enterprise', 'multi_location') then 'growth'
-    when b.plan = 'growth' then 'growth'
-    else 'starter'
+    when b.plan in ('multi_location', 'growth', 'enterprise') then 'multi_location'
+    else 'single_location'
   end,
   null,
   'legacy',
@@ -177,19 +175,23 @@ security definer
 set search_path = public
 as $$
   select
-    coalesce(p.code, case when b.plan in ('multi_location', 'growth', 'enterprise') then 'growth' else 'starter' end) as plan,
-    coalesce(p.max_locations, case when b.plan in ('multi_location', 'growth', 'enterprise') then 10 else 1 end) as max_locations,
     case
-      when coalesce(p.max_locations, case when b.plan in ('multi_location', 'growth', 'enterprise') then 10 else 1 end) > 1 then true
+      when b.plan in ('multi_location', 'growth', 'enterprise') then 'multi_location'
+      else 'single_location'
+    end as plan,
+    case
+      when b.plan in ('multi_location', 'growth', 'enterprise') then 10
+      else 1
+    end as max_locations,
+    case
+      when b.plan in ('multi_location', 'growth', 'enterprise') then true
       else false
     end as multi_location,
     case
-      when coalesce(p.max_locations, case when b.plan in ('multi_location', 'growth', 'enterprise') then 10 else 1 end) > 1 then true
+      when b.plan in ('multi_location', 'growth', 'enterprise') then true
       else false
     end as location_comparison
   from public.businesses b
-  left join public.business_subscriptions s on s.business_id = b.id
-  left join public.plans p on p.code = s.plan_code
   where b.id = _business_id;
 $$;
 
@@ -202,7 +204,7 @@ create or replace function public.bootstrap_owner_business(
   _slug text,
   _name_ar text,
   _name_en text,
-  _plan text default 'starter'
+  _plan text default 'single_location'
 )
 returns table (
   business_id uuid,
@@ -221,7 +223,7 @@ declare
   _clean_slug text := lower(trim(_slug));
   _clean_name_ar text := trim(_name_ar);
   _clean_name_en text := trim(_name_en);
-  _clean_plan text := lower(trim(coalesce(_plan, 'starter')));
+  _clean_plan text := lower(trim(coalesce(_plan, 'single_location')));
   _existing_incomplete_id uuid;
   _new_biz_id uuid;
   _canonical_plan text;
@@ -233,20 +235,11 @@ begin
   -- Advisory lock scoped to the caller's session to serialize double-submits
   perform pg_advisory_xact_lock(hashtext('bootstrap_' || _caller_id::text));
 
-  -- Normalize legacy plan aliases
-  if _clean_plan = 'single_location' then
-    _clean_plan := 'starter';
-  elsif _clean_plan = 'multi_location' then
-    _clean_plan := 'growth';
-  end if;
-
-  -- Validate requested plan against authoritative catalog
-  select code into _canonical_plan
-  from public.plans
-  where code = _clean_plan and is_active = true;
-
-  if _canonical_plan is null then
-    _canonical_plan := 'starter';
+  -- Normalize requested plan
+  if _clean_plan in ('multi_location', 'growth', 'enterprise') then
+    _canonical_plan := 'multi_location';
+  else
+    _canonical_plan := 'single_location';
   end if;
 
   -- Check if user already has an incomplete onboarding business created very recently
@@ -288,7 +281,7 @@ begin
     raise exception 'Business slug already taken';
   end if;
 
-  -- Atomic business creation with starter effective baseline
+  -- Atomic business creation with single_location operational baseline
   insert into public.businesses (
     owner_id,
     slug,
@@ -301,7 +294,7 @@ begin
     _clean_slug,
     _clean_name_ar,
     _clean_name_en,
-    'starter',
+    'single_location',
     'active'
   )
   returning id into _new_biz_id;
@@ -313,7 +306,7 @@ begin
   values (_caller_id, 'merchant', _new_biz_id)
   on conflict do nothing;
 
-  -- Initialize truthful subscription state (pending, unconfigured provider)
+  -- Initialize truthful subscription state (pending, unconfigured provider, baseline single_location)
   insert into public.business_subscriptions (
     business_id,
     plan_code,
@@ -322,7 +315,7 @@ begin
     billing_provider
   ) values (
     _new_biz_id,
-    'starter',
+    'single_location',
     _canonical_plan,
     'pending',
     null
@@ -400,10 +393,10 @@ begin
 
   -- Step: Plan selection
   if _clean_plan <> '' then
-    if _clean_plan = 'single_location' then
-      _clean_plan := 'starter';
-    elsif _clean_plan = 'multi_location' then
-      _clean_plan := 'growth';
+    if _clean_plan in ('multi_location', 'growth', 'enterprise') then
+      _clean_plan := 'multi_location';
+    else
+      _clean_plan := 'single_location';
     end if;
 
     if not exists (select 1 from public.plans where code = _clean_plan and is_active = true) then
@@ -530,10 +523,10 @@ begin
     raise exception 'Plan management denied';
   end if;
 
-  if _clean_plan = 'single_location' then
-    _clean_plan := 'starter';
-  elsif _clean_plan = 'multi_location' then
-    _clean_plan := 'growth';
+  if _clean_plan in ('multi_location', 'growth', 'enterprise') then
+    _clean_plan := 'multi_location';
+  else
+    _clean_plan := 'single_location';
   end if;
 
   select max_locations into _target_max
@@ -565,7 +558,7 @@ begin
 
   -- Return truthful response: online billing is not configured, effective plan unchanged
   return query select
-    coalesce(_current_plan, 'starter'),
+    coalesce(_current_plan, 'single_location'),
     _clean_plan,
     'billing_unconfigured'::text,
     'ONLINE_BILLING_NOT_CONFIGURED'::text;
@@ -616,9 +609,9 @@ begin
 
   return query
   select
-    coalesce(s.plan_code, 'starter'),
-    coalesce(p.name_ar, 'الباقة الأساسية'),
-    coalesce(p.name_en, 'Starter Plan'),
+    coalesce(s.plan_code, case when b.plan in ('multi_location', 'growth', 'enterprise') then 'multi_location' else 'single_location' end),
+    coalesce(p.name_ar, case when coalesce(s.plan_code, b.plan) in ('multi_location', 'growth', 'enterprise') then 'فروع متعددة' else 'فرع واحد' end),
+    coalesce(p.name_en, case when coalesce(s.plan_code, b.plan) in ('multi_location', 'growth', 'enterprise') then 'Multi-Location' else 'Single Location' end),
     s.requested_plan_code,
     coalesce(s.status, 'legacy'),
     s.billing_provider,

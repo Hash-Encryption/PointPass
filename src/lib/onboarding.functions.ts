@@ -12,8 +12,8 @@ const bootstrapSchema = z.object({
   nameAr: z.string().trim().min(2).max(120),
   nameEn: z.string().trim().min(2).max(120),
   plan: z
-    .enum(["starter", "growth", "enterprise", "single_location", "multi_location"])
-    .default("starter"),
+    .enum(["single_location", "multi_location", "starter", "growth", "enterprise"])
+    .default("single_location"),
 });
 
 export const bootstrapOwnerBusinessFn = createServerFn({ method: "POST" })

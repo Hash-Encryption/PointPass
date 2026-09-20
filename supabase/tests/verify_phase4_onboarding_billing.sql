@@ -95,7 +95,7 @@ BEGIN
     'cert-existing-cafe',
     'مقهى معتمد',
     'Certified Existing Cafe',
-    'growth',
+    'multi_location',
     'active'
   ) RETURNING id INTO v_existing_biz_id;
 
@@ -117,7 +117,7 @@ BEGIN
     'cert-other-bistro',
     'بيسترو آخر',
     'Other Bistro',
-    'starter',
+    'single_location',
     'active'
   ) RETURNING id INTO v_other_biz_id;
 
@@ -145,22 +145,22 @@ BEGIN
     'cert-prereg-cafe',
     'مقهى مسجل مسبقاً',
     'Pre-registered Cafe',
-    'starter',
+    'single_location',
     'active'
   ) RETURNING id INTO v_pre_reg_biz_id;
 
   INSERT INTO pg_temp.test_context (key, val) VALUES ('pre_reg_biz', v_pre_reg_biz_id);
 
-  -- Ensure backfill simulation for pre-existing records
+  -- Ensure backfill simulation for pre-existing records (truthful legacy status, null provider)
   INSERT INTO public.business_subscriptions (
     business_id,
     plan_code,
     status,
     billing_provider
   ) VALUES
-    (v_existing_biz_id, 'growth', 'legacy', null),
-    (v_other_biz_id, 'starter', 'legacy', null),
-    (v_pre_reg_biz_id, 'starter', 'legacy', null)
+    (v_existing_biz_id, 'multi_location', 'legacy', null),
+    (v_other_biz_id, 'single_location', 'legacy', null),
+    (v_pre_reg_biz_id, 'single_location', 'legacy', null)
   ON CONFLICT (business_id) DO NOTHING;
 
   INSERT INTO public.business_onboarding (
@@ -201,7 +201,7 @@ BEGIN
     'cert-new-roastery',
     'محمصة جديدة',
     'New Roastery',
-    'starter'
+    'single_location'
   );
 
   -- Store created business ID
@@ -233,10 +233,10 @@ BEGIN
     RAISE EXCEPTION 'Scenario 5 FAILED: Expected exactly 1 active Main Location, found %', v_main_count;
   END IF;
 
-  -- Check subscription was created with pending status
+  -- Check subscription was created with pending status and single_location plan
   SELECT count(*) INTO v_sub_count
   FROM public.business_subscriptions
-  WHERE business_id = v_biz_id AND plan_code = 'starter' AND status = 'pending';
+  WHERE business_id = v_biz_id AND plan_code = 'single_location' AND status = 'pending';
 
   IF v_sub_count <> 1 THEN
     RAISE EXCEPTION 'Scenario 24 FAILED: Subscription record missing or invalid status';
@@ -271,7 +271,7 @@ BEGIN
     'cert-new-roastery',
     'محمصة جديدة',
     'New Roastery',
-    'starter'
+    'single_location'
   );
 
   IF v_second_biz_id <> v_orig_biz_id THEN
@@ -303,7 +303,7 @@ BEGIN
       'cert-new-roastery', -- Same slug as existing new_biz
       'محمصة مكررة',
       'Duplicate Roastery',
-      'starter'
+      'single_location'
     );
   EXCEPTION WHEN OTHERS THEN
     v_failed := true;
@@ -359,7 +359,7 @@ BEGIN
   PERFORM pg_temp.set_test_auth(v_other_uid);
   v_failed := false;
   BEGIN
-    PERFORM public.request_business_plan_change(v_existing_biz_id, 'enterprise');
+    PERFORM public.request_business_plan_change(v_existing_biz_id, 'multi_location');
   EXCEPTION WHEN OTHERS THEN
     v_failed := true;
   END;
@@ -371,7 +371,7 @@ BEGIN
   PERFORM pg_temp.set_test_auth(v_manager_uid);
   v_failed := false;
   BEGIN
-    PERFORM public.request_business_plan_change(v_existing_biz_id, 'enterprise');
+    PERFORM public.request_business_plan_change(v_existing_biz_id, 'multi_location');
   EXCEPTION WHEN OTHERS THEN
     v_failed := true;
   END;
@@ -383,7 +383,7 @@ BEGIN
   PERFORM pg_temp.set_test_auth(v_cashier_uid);
   v_failed := false;
   BEGIN
-    PERFORM public.request_business_plan_change(v_existing_biz_id, 'enterprise');
+    PERFORM public.request_business_plan_change(v_existing_biz_id, 'multi_location');
   EXCEPTION WHEN OTHERS THEN
     v_failed := true;
   END;
@@ -442,7 +442,7 @@ BEGIN
   -- Attempting direct update on businesses.plan is blocked by protect_business_admin_fields
   BEGIN
     UPDATE public.businesses
-    SET plan = 'growth'
+    SET plan = 'multi_location'
     WHERE id = v_biz_id;
   EXCEPTION WHEN OTHERS THEN
     v_failed := true;
@@ -478,12 +478,12 @@ DECLARE
 BEGIN
   PERFORM pg_temp.set_test_auth(v_owner_uid);
 
-  -- Check effective entitlement for new business (starter = 1 max location)
+  -- Check effective entitlement for new business (single_location = 1 max location)
   SELECT * INTO v_ent
   FROM public.business_location_entitlement(v_biz_id);
 
   IF v_ent.max_locations <> 1 OR v_ent.multi_location <> false THEN
-    RAISE EXCEPTION 'Scenario 15 FAILED: Expected starter max_locations = 1, found %', v_ent.max_locations;
+    RAISE EXCEPTION 'Scenario 15 FAILED: Expected single_location max_locations = 1, found %', v_ent.max_locations;
   END IF;
 
   -- Since 1 active Main Location already exists, adding a 2nd active branch must fail
@@ -503,7 +503,7 @@ BEGIN
   END;
 
   IF NOT v_failed THEN
-    RAISE EXCEPTION 'Scenario 16 FAILED: Location limit did not prevent adding 2nd active location under starter plan';
+    RAISE EXCEPTION 'Scenario 16 FAILED: Location limit did not prevent adding 2nd active location under single_location plan';
   END IF;
 END;
 $$;
@@ -522,8 +522,8 @@ BEGIN
   FROM public.business_subscriptions
   WHERE business_id = v_existing_biz_id;
 
-  IF v_sub.plan_code <> 'growth' OR v_sub.status <> 'legacy' THEN
-    RAISE EXCEPTION 'Scenario 18 FAILED: Existing business plan not preserved as growth / legacy';
+  IF v_sub.plan_code <> 'multi_location' OR v_sub.status <> 'legacy' THEN
+    RAISE EXCEPTION 'Scenario 18 FAILED: Existing business plan not preserved as multi_location / legacy';
   END IF;
 
   SELECT * INTO v_onb
@@ -538,7 +538,7 @@ BEGIN
   FROM public.business_location_entitlement(v_existing_biz_id);
 
   IF v_ent.max_locations <> 10 OR v_ent.multi_location <> true THEN
-    RAISE EXCEPTION 'Scenario 18 FAILED: Entitlement for growth plan should be 10 locations, got %', v_ent.max_locations;
+    RAISE EXCEPTION 'Scenario 18 FAILED: Entitlement for multi_location plan should be 10 locations, got %', v_ent.max_locations;
   END IF;
 END;
 $$;
@@ -578,7 +578,7 @@ DECLARE
 BEGIN
   PERFORM pg_temp.set_test_auth(v_owner_uid);
 
-  -- Existing business has growth entitlement (10 locations). Add a second active branch.
+  -- Existing business has multi_location entitlement (10 locations). Add a second active branch.
   v_branch2_id := public.operations_upsert_branch(
     v_existing_biz_id,
     null,
@@ -590,9 +590,9 @@ BEGIN
     'active'
   );
 
-  -- Now current active locations = 2. Downgrading to 'starter' (limit = 1) must be rejected!
+  -- Now current active locations = 2. Downgrading to 'single_location' (limit = 1) must be rejected!
   BEGIN
-    PERFORM public.request_business_plan_change(v_existing_biz_id, 'starter');
+    PERFORM public.request_business_plan_change(v_existing_biz_id, 'single_location');
   EXCEPTION WHEN OTHERS THEN
     v_failed := true;
   END;

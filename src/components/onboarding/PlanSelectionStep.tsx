@@ -4,7 +4,7 @@ import { Loader2, ArrowLeft, ArrowRight, Check, MapPin, Sparkles } from "lucide-
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useLocale } from "@/lib/i18n";
-import { AVAILABLE_PLANS, CanonicalPlanCode } from "@/lib/plans";
+import { AVAILABLE_PLANS, CanonicalPlanCode, resolveCanonicalPlan } from "@/lib/plans";
 import { saveOnboardingStepFn } from "@/lib/onboarding.functions";
 import { supabase } from "@/lib/supabase";
 
@@ -17,7 +17,7 @@ interface PlanSelectionStepProps {
 
 export function PlanSelectionStep({
   businessId,
-  initialPlan = "starter",
+  initialPlan = "single_location",
   onSuccess,
   onBack,
 }: PlanSelectionStepProps) {
@@ -25,7 +25,7 @@ export function PlanSelectionStep({
   const ar = locale === "ar";
 
   const [selectedPlan, setSelectedPlan] = useState<CanonicalPlanCode>(
-    initialPlan === "growth" || initialPlan === "enterprise" ? initialPlan : "starter",
+    resolveCanonicalPlan(initialPlan),
   );
   const [saving, setSaving] = useState(false);
 
@@ -52,7 +52,7 @@ export function PlanSelectionStep({
         },
       });
 
-      toast.success(ar ? "تم تسجيل اختيار الباقة ومتابعة الإعداد" : "Plan preference saved");
+      toast.success(ar ? "تم تسجيل اختيار الخطة ومتابعة الإعداد" : "Plan preference saved");
       onSuccess(selectedPlan);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err));
@@ -71,20 +71,20 @@ export function PlanSelectionStep({
           <h2 className="text-lg font-bold">{t("stepPlan")}</h2>
           <p className="text-xs text-muted-foreground">
             {ar
-              ? "اختر الباقة المناسبة لسعة فروع منشأتك لتخصيص لوحة التحكم."
-              : "Select the plan capacity suited for your business locations."}
+              ? "اختر السعة التشغيلية المناسبة لفروع منشأتك لتخصيص لوحة التحكم."
+              : "Select the operational capacity suited for your business locations."}
           </p>
         </div>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-2">
         {AVAILABLE_PLANS.map((plan) => {
           const isSelected = selectedPlan === plan.code;
           return (
             <div
               key={plan.code}
               onClick={() => setSelectedPlan(plan.code)}
-              className={`rounded-2xl border p-4 cursor-pointer transition-all flex flex-col justify-between ${
+              className={`rounded-2xl border p-5 cursor-pointer transition-all flex flex-col justify-between ${
                 isSelected
                   ? "border-primary bg-primary/5 ring-2 ring-primary/20 shadow-xs"
                   : "border-border/80 bg-card hover:border-primary/40"
@@ -92,9 +92,7 @@ export function PlanSelectionStep({
             >
               <div>
                 <div className="flex items-center justify-between gap-2 mb-2">
-                  <h3 className="font-bold text-sm sm:text-base">
-                    {ar ? plan.nameAr : plan.nameEn}
-                  </h3>
+                  <h3 className="font-bold text-base">{ar ? plan.nameAr : plan.nameEn}</h3>
                   <div
                     className={`size-5 rounded-full flex items-center justify-center text-xs ${
                       isSelected ? "bg-primary text-primary-foreground" : "border border-border"
@@ -107,14 +105,23 @@ export function PlanSelectionStep({
                 <p className="text-xs text-muted-foreground mb-4">
                   {ar ? plan.descriptionAr : plan.descriptionEn}
                 </p>
+
+                <div className="space-y-2 mb-4">
+                  {(ar ? plan.featuresAr : plan.featuresEn).map((feat, idx) => (
+                    <div key={idx} className="flex items-center gap-2 text-xs text-foreground/90">
+                      <div className="size-1.5 rounded-full bg-primary shrink-0" />
+                      <span>{feat}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
 
               <div className="pt-3 border-t border-border/40">
                 <Badge
                   variant={isSelected ? "default" : "secondary"}
-                  className="text-xs font-medium w-full justify-center"
+                  className="text-xs font-medium w-full justify-center py-1"
                 >
-                  <MapPin className="size-3 me-1" />
+                  <MapPin className="size-3.5 me-1" />
                   {plan.maxLocations === 1
                     ? t("singleLocationAllowance")
                     : t("multiLocationAllowance")}
@@ -130,8 +137,8 @@ export function PlanSelectionStep({
           {ar ? "ملاحظة تشغيلية:" : "Operational Note:"}
         </span>
         {ar
-          ? "يتم تفعيل سعة الفروع وفق الاختيار مع الحفاظ على الفرع الرئيسي تلقائياً، والربط بالفوترة عند تفعيلها."
-          : "Location entitlement is configured based on your selection while preserving your automatic Main Location."}
+          ? "الخطة التشغيلية الأساسية (فرع واحد) مشمولة تلقائياً لمنشأتك. اختيار الفروع المتعددة يسجل رغبتك التشغيلية دون فرض أي فوترة غير معتمدة."
+          : "The single-location operational baseline is included automatically. Requesting multi-location records your operational preference without unapproved billing activation."}
       </div>
 
       <div className="pt-3 border-t border-border/60 flex items-center justify-between">

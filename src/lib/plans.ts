@@ -2,17 +2,17 @@
  * Authoritative PointPass Plan Catalog & Entitlement Types
  *
  * Truthful architectural model:
- *   - starter: 1 active Location
- *   - growth: 10 active Locations
- *   - enterprise: 10 active Locations (custom / high-volume)
+ *   - single_location: 1 active Location (Operational Baseline)
+ *   - multi_location: 10 active Locations (Multi-Branch Operations)
  *
  * Invariants:
  *   - Zero fabricated pricing (no invented SAR prices, no fake free tier, no fake trial).
- *   - Compatibility aliases: 'single_location' -> starter, 'multi_location' -> growth.
+ *   - Zero unapproved commercial promises or packaging tiers.
+ *   - Compatibility aliases: 'starter' -> single_location, 'growth'/'enterprise' -> multi_location.
  */
 
-export type CanonicalPlanCode = "starter" | "growth" | "enterprise";
-export type HistoricalPlanCode = CanonicalPlanCode | "single_location" | "multi_location";
+export type CanonicalPlanCode = "single_location" | "multi_location";
+export type HistoricalPlanCode = CanonicalPlanCode | "starter" | "growth" | "enterprise";
 
 export interface PlanDefinition {
   code: CanonicalPlanCode;
@@ -23,52 +23,70 @@ export interface PlanDefinition {
   maxLocations: number;
   multiLocation: boolean;
   isActive: boolean;
+  featuresAr: string[];
+  featuresEn: string[];
 }
 
 export const PLAN_CATALOG: Record<CanonicalPlanCode, PlanDefinition> = {
-  starter: {
-    code: "starter",
-    nameAr: "الباقة الأساسية",
-    nameEn: "Starter Plan",
-    descriptionAr: "مصممة لإدارة فرع واحد مع بطاقات الولاء الرقمية ورمز الانضمام السريع.",
-    descriptionEn: "Single-location operations with digital passes, QR join, and scanner support.",
+  single_location: {
+    code: "single_location",
+    nameAr: "فرع واحد",
+    nameEn: "Single Location",
+    descriptionAr: "الخطة التشغيلية الأساسية لإدارة فرع واحد مع بطاقات الولاء الرقمية ومسح الرموز.",
+    descriptionEn:
+      "Operational baseline for single-branch businesses with digital passes and QR scanning.",
     maxLocations: 1,
     multiLocation: false,
     isActive: true,
+    featuresAr: [
+      "فرع رئيسي نشط واحد",
+      "بطاقات الأختام الرقمية",
+      "رمز QR للانضمام السريع",
+      "لوحة تحكم ونقاط الولاء",
+    ],
+    featuresEn: [
+      "1 active main location",
+      "Digital stamp cards & passes",
+      "Quick-join QR codes",
+      "Dashboard & loyalty management",
+    ],
   },
-  growth: {
-    code: "growth",
-    nameAr: "باقة النمو",
-    nameEn: "Growth Plan",
-    descriptionAr: "تدعم حتى ١٠ فروع مع إدارة تفصيلية للفريق وتخصيص صلاحيات المدراء والكاشيرات.",
-    descriptionEn: "Up to 10 locations with branch-scoped management, cashier PINs, and analytics.",
+  multi_location: {
+    code: "multi_location",
+    nameAr: "فروع متعددة",
+    nameEn: "Multi-Location",
+    descriptionAr: "الخطة التشغيلية لإدارة عدة فروع (حتى 10 فروع) مع تخصيص صلاحيات الفريق.",
+    descriptionEn:
+      "Operational entitlement for multi-branch operations (up to 10 locations) with team role scoping.",
     maxLocations: 10,
     multiLocation: true,
     isActive: true,
-  },
-  enterprise: {
-    code: "enterprise",
-    nameAr: "باقة المنشآت الكبرى",
-    nameEn: "Enterprise Plan",
-    descriptionAr: "للسلاسل والعمليات الواسعة التي تتطلب سعة مواقع متقدمة وحسابات متعددة.",
-    descriptionEn: "Large multi-branch chains with high-volume digital loyalty operations.",
-    maxLocations: 10,
-    multiLocation: true,
-    isActive: true,
+    featuresAr: [
+      "حتى 10 فروع نشطة",
+      "صلاحيات مخصصة لمدراء الفروع والكاشيرات",
+      "مقارنة وإحصائيات على مستوى الفروع",
+      "بطاقات الولاء الموحدة",
+    ],
+    featuresEn: [
+      "Up to 10 active locations",
+      "Branch-scoped manager & cashier permissions",
+      "Location comparison & metrics",
+      "Unified loyalty pass",
+    ],
   },
 };
 
 export const AVAILABLE_PLANS: PlanDefinition[] = [
-  PLAN_CATALOG.starter,
-  PLAN_CATALOG.growth,
-  PLAN_CATALOG.enterprise,
+  PLAN_CATALOG.single_location,
+  PLAN_CATALOG.multi_location,
 ];
 
 export function resolveCanonicalPlan(input: string | null | undefined): CanonicalPlanCode {
-  const norm = (input || "starter").trim().toLowerCase();
-  if (norm === "growth" || norm === "multi_location") return "growth";
-  if (norm === "enterprise") return "enterprise";
-  return "starter";
+  const norm = (input || "single_location").trim().toLowerCase();
+  if (norm === "multi_location" || norm === "growth" || norm === "enterprise") {
+    return "multi_location";
+  }
+  return "single_location";
 }
 
 export function getPlanDefinition(input: string | null | undefined): PlanDefinition {

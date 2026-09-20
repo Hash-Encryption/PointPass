@@ -250,7 +250,7 @@ export function PlanBillingPanel({ businessId, ar }: PlanBillingPanelProps) {
           </p>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-2">
           {AVAILABLE_PLANS.map((plan) => {
             const isCurrent = state.planCode === plan.code;
             const isRequested = state.requestedPlanCode === plan.code;
@@ -259,7 +259,7 @@ export function PlanBillingPanel({ businessId, ar }: PlanBillingPanelProps) {
             return (
               <div
                 key={plan.code}
-                className={`rounded-2xl border p-4 flex flex-col justify-between transition-all ${
+                className={`rounded-2xl border p-5 flex flex-col justify-between transition-all ${
                   isCurrent
                     ? "border-primary bg-primary/5 ring-1 ring-primary/20 shadow-xs"
                     : "border-border/80 bg-card"
@@ -267,9 +267,7 @@ export function PlanBillingPanel({ businessId, ar }: PlanBillingPanelProps) {
               >
                 <div>
                   <div className="flex items-center justify-between gap-2 mb-2">
-                    <h4 className="font-bold text-sm sm:text-base">
-                      {ar ? plan.nameAr : plan.nameEn}
-                    </h4>
+                    <h4 className="font-bold text-base">{ar ? plan.nameAr : plan.nameEn}</h4>
                     {isCurrent && (
                       <Badge variant="default" className="text-[10px] px-1.5 py-0.5">
                         {t("currentPlan")}
@@ -288,6 +286,15 @@ export function PlanBillingPanel({ businessId, ar }: PlanBillingPanelProps) {
                   <p className="text-xs text-muted-foreground mb-4">
                     {ar ? plan.descriptionAr : plan.descriptionEn}
                   </p>
+
+                  <div className="space-y-2 mb-4">
+                    {(ar ? plan.featuresAr : plan.featuresEn).map((feat, idx) => (
+                      <div key={idx} className="flex items-center gap-2 text-xs text-foreground/90">
+                        <div className="size-1.5 rounded-full bg-primary shrink-0" />
+                        <span>{feat}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
 
                 <div className="space-y-3 pt-3 border-t border-border/40">
