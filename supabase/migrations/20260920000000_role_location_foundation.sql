@@ -97,7 +97,18 @@ begin
     return new;
   end if;
 
-  if tg_op = 'UPDATE' and old.status = 'active' then
+  if tg_op = 'UPDATE' and old.status = 'active' and old.business_id = new.business_id then
+    return new;
+  end if;
+
+  -- If this is an INSERT and a branch with the same code already exists for this business,
+  -- this insert cannot add a new active branch (it will either DO NOTHING on conflict,
+  -- fail with unique constraint violation, or transition to BEFORE UPDATE).
+  if tg_op = 'INSERT' and exists (
+    select 1 from public.branches b
+    where b.business_id = new.business_id
+      and lower(b.code) = lower(new.code)
+  ) then
     return new;
   end if;
 
