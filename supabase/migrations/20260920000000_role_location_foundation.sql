@@ -284,6 +284,7 @@ using (
 -- 6. ENHANCED OPERATIONS ACCESS RPC
 -- ============================================================================
 -- Returns canonical role, business management permission, and explicit managed branch IDs.
+drop function if exists public.operations_access(uuid);
 create or replace function public.operations_access(_business_id uuid)
 returns table (
   operational_role text,
