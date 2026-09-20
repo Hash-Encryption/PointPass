@@ -234,7 +234,8 @@ begin
       on a.staff_id = s.id and a.business_id = s.business_id
     where s.auth_user_id = _user_id
       and s.business_id = _business_id
-      and s.status = 'active';
+      and s.status = 'active'
+      and s.role in ('manager', 'admin', 'owner');
   end if;
 
   return coalesce(_branches, array[]::uuid[]);
@@ -287,6 +288,25 @@ begin
   end if;
 
   _is_owner := public.can_manage_business(auth.uid(), _business_id);
+
+  -- Explicitly deny cashiers
+  if not _is_owner and exists (
+    select 1 from public.staff_members s
+    where s.auth_user_id = auth.uid()
+      and s.business_id = _business_id
+      and s.status = 'active'
+      and s.role in ('cashier', 'staff')
+      and not exists (
+        select 1 from public.staff_members s2
+        where s2.auth_user_id = auth.uid()
+          and s2.business_id = _business_id
+          and s2.status = 'active'
+          and s2.role in ('owner', 'admin', 'manager')
+      )
+  ) then
+    raise exception 'Access denied: cashiers cannot access customer intelligence';
+  end if;
+
   _managed_branches := public.managed_branch_ids(auth.uid(), _business_id);
 
   if not _is_owner then
@@ -436,6 +456,25 @@ begin
   end if;
 
   _is_owner := public.can_manage_business(auth.uid(), _business_id);
+
+  -- Explicitly deny cashiers
+  if not _is_owner and exists (
+    select 1 from public.staff_members s
+    where s.auth_user_id = auth.uid()
+      and s.business_id = _business_id
+      and s.status = 'active'
+      and s.role in ('cashier', 'staff')
+      and not exists (
+        select 1 from public.staff_members s2
+        where s2.auth_user_id = auth.uid()
+          and s2.business_id = _business_id
+          and s2.status = 'active'
+          and s2.role in ('owner', 'admin', 'manager')
+      )
+  ) then
+    raise exception 'Access denied: cashiers cannot access customer intelligence';
+  end if;
+
   _managed_branches := public.managed_branch_ids(auth.uid(), _business_id);
 
   select * into _pass
