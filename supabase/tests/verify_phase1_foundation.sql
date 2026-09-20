@@ -1,12 +1,29 @@
 -- ==============================================================================
--- PointPass Phase 1: Role + Location Foundation Executable Verification Suite
--- Matches actual PointPass schema and RPC signatures.
--- Executes inside a transaction with automatic ROLLBACK so no test data remains.
+-- PointPass Phase 1: Role + Location Foundation Executable Certification Suite
+-- Genuine RLS Execution under PostgreSQL role "authenticated".
+-- Executes inside a transaction with automatic ROLLBACK so zero test data remains.
 -- ==============================================================================
 
 BEGIN;
 
--- Helper function in temporary schema for auth context simulation
+-- ------------------------------------------------------------------------------
+-- 1. Temporary Fixtures & Context Registry (Privileged Execution as Session User)
+-- ------------------------------------------------------------------------------
+CREATE TEMP TABLE pg_temp.test_context (
+  key text PRIMARY KEY,
+  val uuid NOT NULL
+);
+GRANT ALL ON pg_temp.test_context TO authenticated;
+
+CREATE OR REPLACE FUNCTION pg_temp.get_ctx(p_key text)
+RETURNS uuid
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT val FROM pg_temp.test_context WHERE key = p_key;
+$$;
+GRANT EXECUTE ON FUNCTION pg_temp.get_ctx(text) TO authenticated;
+
 CREATE OR REPLACE FUNCTION pg_temp.set_test_auth(p_uid uuid)
 RETURNS void
 LANGUAGE plpgsql
@@ -16,8 +33,9 @@ BEGIN
   PERFORM set_config('request.jwt.claims', json_build_object('sub', p_uid::text, 'role', 'authenticated')::text, true);
 END;
 $$;
+GRANT EXECUTE ON FUNCTION pg_temp.set_test_auth(uuid) TO authenticated;
 
--- Force RLS on tested relations so tests evaluate policies even if run by table owner / postgres
+-- Force RLS on tested relations as defense-in-depth
 ALTER TABLE public.branches FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.staff_members FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.staff_branch_assignments FORCE ROW LEVEL SECURITY;
@@ -60,20 +78,16 @@ DECLARE
   v_name_en text;
   v_status text;
   v_role text;
-  v_can_manage boolean;
-  v_can_manage_biz boolean;
-  v_managed_branch_ids uuid[];
-  v_analytics jsonb;
   v_error_thrown boolean;
   v_error_message text;
 BEGIN
   RAISE NOTICE '==============================================================';
   RAISE NOTICE 'Starting PointPass Phase 1 Real Database Certification Suite';
+  RAISE NOTICE 'Phase: Privileged Setup and Database Constraints Engine';
+  RAISE NOTICE 'Current User: % | Session User: %', current_user, session_user;
   RAISE NOTICE '==============================================================';
 
-  -- ----------------------------------------------------------------------------
-  -- Setup: Create Mock auth.users records for referential integrity
-  -- ----------------------------------------------------------------------------
+  -- A. Create Mock auth.users records for referential integrity
   INSERT INTO auth.users (id, email, raw_user_meta_data)
   VALUES
     (v_owner_user_id, 'owner@test.local', '{}'::jsonb),
@@ -83,11 +97,8 @@ BEGIN
     (v_legacy_admin_user_id, 'legacy_admin@test.local', '{}'::jsonb)
   ON CONFLICT (id) DO NOTHING;
 
-  -- ----------------------------------------------------------------------------
-  -- TEST 1: Automatic Main Location Creation on Business Insert
-  -- ----------------------------------------------------------------------------
-  RAISE NOTICE '[TEST 1] Verifying automatic main branch creation...';
-
+  -- B. TEST 1: Automatic Main Location Creation
+  RAISE NOTICE '[TEST 1] Verifying automatic main branch creation on new business...';
   INSERT INTO public.businesses (
     id, owner_id, slug, name_ar, name_en, plan, status
   ) VALUES (
@@ -109,7 +120,7 @@ BEGIN
       v_name_ar, v_name_en, v_status;
   END IF;
 
-  -- Main Location Idempotency check: duplicate insert should be ignored
+  -- Idempotency check: duplicate insert ignored on conflict
   INSERT INTO public.branches (
     business_id, code, name_ar, name_en, status
   ) VALUES (
@@ -123,14 +134,10 @@ BEGIN
   IF v_count <> 1 THEN
     RAISE EXCEPTION 'TEST 1 FAILED: Main branch was duplicated on conflict';
   END IF;
-
   RAISE NOTICE '  PASS: Automatic main location created with correct defaults and idempotency.';
 
-  -- ----------------------------------------------------------------------------
-  -- TEST 2: Single-Location Limit Enforcement (max = 1)
-  -- ----------------------------------------------------------------------------
+  -- C. TEST 2: Single-Location Limit Enforcement (max = 1)
   RAISE NOTICE '[TEST 2] Verifying single_location business cannot exceed 1 branch...';
-
   SELECT max_locations INTO v_limit
   FROM public.business_location_entitlement(v_single_biz_id);
 
@@ -138,7 +145,6 @@ BEGIN
     RAISE EXCEPTION 'TEST 2 FAILED: Expected entitlement max_locations = 1, got %', v_limit;
   END IF;
 
-  -- Attempting to insert a 2nd active branch must fail
   v_error_thrown := false;
   BEGIN
     INSERT INTO public.branches (
@@ -157,24 +163,17 @@ BEGIN
 
   -- Deactivating main branch allows replacement active branch
   UPDATE public.branches SET status = 'inactive' WHERE id = v_single_main_branch_id;
-
   INSERT INTO public.branches (
     business_id, code, name_ar, name_en, status
   ) VALUES (
     v_single_biz_id, 'replacement-branch', 'فرع بديل', 'Replacement Branch', 'active'
   );
-
-  -- Clean up replacement branch and reactivate main branch
   DELETE FROM public.branches WHERE business_id = v_single_biz_id AND code = 'replacement-branch';
   UPDATE public.branches SET status = 'active' WHERE id = v_single_main_branch_id;
+  RAISE NOTICE '  PASS: Single-location limit strictly enforced; inactive branches do not block replacement.';
 
-  RAISE NOTICE '  PASS: Single-location limit strictly enforced; inactive branches do not block replacements.';
-
-  -- ----------------------------------------------------------------------------
-  -- TEST 3: Multi-Location Limit Enforcement (CONFIGURED_MULTI_LIMIT = 10)
-  -- ----------------------------------------------------------------------------
+  -- D. TEST 3: Multi-Location Limit Enforcement (limit = 10)
   RAISE NOTICE '[TEST 3] Verifying multi_location business limit (limit = 10)...';
-
   INSERT INTO public.businesses (
     id, owner_id, slug, name_ar, name_en, plan, status
   ) VALUES (
@@ -193,7 +192,7 @@ BEGIN
     RAISE EXCEPTION 'TEST 3 FAILED: Expected entitlement max_locations = 10, got %', v_limit;
   END IF;
 
-  -- Multi business already has branch 1 (main). Insert 9 more branches (reaching 10 total).
+  -- Insert branches 2..10
   FOR i IN 2..10 LOOP
     INSERT INTO public.branches (
       business_id, code, name_ar, name_en, status
@@ -210,7 +209,7 @@ BEGIN
     RAISE EXCEPTION 'TEST 3 FAILED: Expected 10 active branches, found %', v_count;
   END IF;
 
-  -- Attempting to insert an 11th branch must fail
+  -- 11th branch insert must fail
   v_error_thrown := false;
   BEGIN
     INSERT INTO public.branches (
@@ -226,12 +225,9 @@ BEGIN
   IF NOT v_error_thrown OR v_error_message NOT LIKE '%Location limit exceeded%' THEN
     RAISE EXCEPTION 'TEST 3 FAILED: Multi-location business inserted an 11th branch (error: %)', v_error_message;
   END IF;
-
   RAISE NOTICE '  PASS: Multi-location limit (10) strictly enforced at DB level.';
 
-  -- ----------------------------------------------------------------------------
-  -- Setup: Other Business for Cross-Tenant Isolation
-  -- ----------------------------------------------------------------------------
+  -- E. Setup Other Competitor Business
   INSERT INTO public.businesses (
     id, owner_id, slug, name_ar, name_en, plan, status
   ) VALUES (
@@ -243,14 +239,11 @@ BEGIN
   FROM public.branches
   WHERE business_id = v_other_biz_id AND lower(code) = 'main';
 
-  -- ----------------------------------------------------------------------------
-  -- TEST 4: Backend Staff Role Creation Restrictions (operations_upsert_staff)
-  -- ----------------------------------------------------------------------------
+  -- F. TEST 4: Backend Staff Role Restrictions in operations_upsert_staff
   RAISE NOTICE '[TEST 4] Verifying authoritative backend restriction on new staff roles...';
-
   PERFORM pg_temp.set_test_auth(v_owner_user_id);
 
-  -- 4a. Fresh staff with role 'admin' must fail
+  -- Fresh staff with role 'admin' must fail
   v_error_thrown := false;
   BEGIN
     PERFORM public.operations_upsert_staff(
@@ -271,7 +264,7 @@ BEGIN
     RAISE EXCEPTION 'TEST 4a FAILED: Allowed creation of new staff with admin role (error: %)', v_error_message;
   END IF;
 
-  -- 4b. Fresh staff with role 'staff' must fail
+  -- Fresh staff with role 'staff' must fail
   v_error_thrown := false;
   BEGIN
     PERFORM public.operations_upsert_staff(
@@ -292,7 +285,7 @@ BEGIN
     RAISE EXCEPTION 'TEST 4b FAILED: Allowed creation of new staff with generic staff role (error: %)', v_error_message;
   END IF;
 
-  -- 4c. Fresh staff with role 'manager' must SUCCEED
+  -- Fresh staff with role 'manager' succeeds
   v_staff_mgr_id := public.operations_upsert_staff(
     _business_id := v_multi_biz_id,
     _staff_id := NULL,
@@ -303,7 +296,7 @@ BEGIN
     _role := 'manager'
   );
 
-  -- 4d. Fresh staff with role 'cashier' must SUCCEED
+  -- Fresh staff with role 'cashier' succeeds
   v_staff_csh_id := public.operations_upsert_staff(
     _business_id := v_multi_biz_id,
     _staff_id := NULL,
@@ -315,7 +308,7 @@ BEGIN
     _pin := '1234'
   );
 
-  -- Create staff for Location B to test cross-branch staff isolation
+  -- Cashier for Branch B
   v_staff_other_branch_id := public.operations_upsert_staff(
     _business_id := v_multi_biz_id,
     _staff_id := NULL,
@@ -327,7 +320,7 @@ BEGIN
     _pin := '5678'
   );
 
-  -- 4e. Legacy Staff Preservation: insert legacy 'admin' via DB seed (simulating existing legacy user)
+  -- Legacy Staff record insertion via seed
   INSERT INTO public.staff_members (
     business_id, auth_user_id, code, name_ar, name_en, email, role, status
   ) VALUES (
@@ -335,7 +328,7 @@ BEGIN
     'legacy_admin@test.local', 'admin', 'active'
   ) RETURNING id INTO v_staff_legacy_admin_id;
 
-  -- Editing existing legacy admin without changing role must SUCCEED (preserving legacy role)
+  -- Safe edit of existing legacy admin (preserving role) succeeds
   PERFORM public.operations_upsert_staff(
     _business_id := v_multi_biz_id,
     _staff_id := v_staff_legacy_admin_id,
@@ -366,81 +359,129 @@ BEGIN
   IF NOT v_error_thrown OR v_error_message NOT LIKE '%Role can only be transitioned to manager or cashier%' THEN
     RAISE EXCEPTION 'TEST 4e FAILED: Allowed transition of manager to admin (error: %)', v_error_message;
   END IF;
-
   RAISE NOTICE '  PASS: Authoritative backend role restrictions validated.';
 
-  -- ----------------------------------------------------------------------------
-  -- Setup: Staff Branch Assignments & Sessions & Transactions
-  -- ----------------------------------------------------------------------------
-  -- Assign Manager and Cashier A ONLY to Branch A (main)
+  -- G. Setup Branch Assignments, Cashier Sessions, and Transactions
   PERFORM public.operations_assign_staff(v_multi_biz_id, v_staff_mgr_id, v_multi_branch_a_id, true);
   PERFORM public.operations_assign_staff(v_multi_biz_id, v_staff_csh_id, v_multi_branch_a_id, true);
-
-  -- Assign Cashier B to Branch B
   PERFORM public.operations_assign_staff(v_multi_biz_id, v_staff_other_branch_id, v_multi_branch_b_id, true);
 
-  -- Cashier Session in Branch A
+  -- Sessions
   INSERT INTO public.cashier_sessions (
     business_id, branch_id, staff_id, token_hash, device_name, expires_at
   ) VALUES (
     v_multi_biz_id, v_multi_branch_a_id, v_staff_csh_id, 'hash-token-a', 'Terminal A', now() + interval '1 hour'
   ) RETURNING id INTO v_session_a_id;
 
-  -- Cashier Session in Branch B
   INSERT INTO public.cashier_sessions (
     business_id, branch_id, staff_id, token_hash, device_name, expires_at
   ) VALUES (
     v_multi_biz_id, v_multi_branch_b_id, v_staff_other_branch_id, 'hash-token-b', 'Terminal B', now() + interval '1 hour'
   ) RETURNING id INTO v_session_b_id;
 
-  -- Legacy Unattributed Cashier Session (branch_id IS NULL)
   INSERT INTO public.cashier_sessions (
     business_id, branch_id, staff_id, token_hash, device_name, expires_at
   ) VALUES (
     v_multi_biz_id, NULL, NULL, 'hash-token-legacy', 'Legacy Device', now() + interval '1 hour'
   ) RETURNING id INTO v_session_unattributed_id;
 
-  -- Transaction in Branch A
+  -- Transactions
   INSERT INTO public.pass_transactions (
     pass_serial, business_id, branch_id, staff_id, action, amount_sar
   ) VALUES (
     'PASS-001', v_multi_biz_id, v_multi_branch_a_id, v_staff_csh_id, 'stamp', NULL
   ) RETURNING id INTO v_tx_a_id;
 
-  -- Transaction in Branch B
   INSERT INTO public.pass_transactions (
     pass_serial, business_id, branch_id, staff_id, action, amount_sar
   ) VALUES (
     'PASS-002', v_multi_biz_id, v_multi_branch_b_id, v_staff_other_branch_id, 'stamp', NULL
   ) RETURNING id INTO v_tx_b_id;
 
-  -- Legacy Unattributed Transaction (branch_id IS NULL)
   INSERT INTO public.pass_transactions (
     pass_serial, business_id, branch_id, staff_id, action, amount_sar
   ) VALUES (
     'PASS-003', v_multi_biz_id, NULL, NULL, 'points', 50
   ) RETURNING id INTO v_tx_unattributed_id;
 
-  -- ----------------------------------------------------------------------------
-  -- TEST 5: RLS Recursion Audit & Manager READ Isolation
-  -- ----------------------------------------------------------------------------
-  RAISE NOTICE '[TEST 5] Testing RLS queries under Manager context (recursion & isolation audit)...';
+  -- Save Fixture Context for RLS test blocks
+  INSERT INTO pg_temp.test_context (key, val) VALUES
+    ('owner_id', v_owner_user_id),
+    ('other_owner_id', v_other_owner_id),
+    ('manager_id', v_manager_user_id),
+    ('cashier_id', v_cashier_user_id),
+    ('legacy_admin_id', v_legacy_admin_user_id),
+    ('single_biz_id', v_single_biz_id),
+    ('multi_biz_id', v_multi_biz_id),
+    ('other_biz_id', v_other_biz_id),
+    ('branch_a_id', v_multi_branch_a_id),
+    ('branch_b_id', v_multi_branch_b_id),
+    ('other_branch_id', v_other_branch_id),
+    ('staff_mgr_id', v_staff_mgr_id),
+    ('staff_csh_id', v_staff_csh_id),
+    ('staff_other_branch_id', v_staff_other_branch_id),
+    ('session_a_id', v_session_a_id),
+    ('session_b_id', v_session_b_id),
+    ('session_unattributed_id', v_session_unattributed_id),
+    ('tx_a_id', v_tx_a_id),
+    ('tx_b_id', v_tx_b_id),
+    ('tx_unattributed_id', v_tx_unattributed_id);
 
-  PERFORM pg_temp.set_test_auth(v_manager_user_id);
+  RAISE NOTICE 'Privileged fixtures created. Transitioning to genuine "authenticated" RLS role execution...';
+END $$;
 
-  -- 5a. Branch read isolation
-  SELECT count(*) INTO v_count FROM public.branches WHERE business_id = v_multi_biz_id;
-  IF v_count <> 1 THEN
-    RAISE EXCEPTION 'TEST 5a FAILED: Manager should only see 1 assigned branch, saw %', v_count;
+-- ------------------------------------------------------------------------------
+-- 2. MANAGER ISOLATION: Genuine RLS Execution as role "authenticated"
+-- ------------------------------------------------------------------------------
+SET LOCAL ROLE authenticated;
+
+DO $$
+DECLARE
+  v_manager_id uuid := pg_temp.get_ctx('manager_id');
+  v_multi_biz_id uuid := pg_temp.get_ctx('multi_biz_id');
+  v_branch_a_id uuid := pg_temp.get_ctx('branch_a_id');
+  v_branch_b_id uuid := pg_temp.get_ctx('branch_b_id');
+  v_staff_mgr_id uuid := pg_temp.get_ctx('staff_mgr_id');
+  v_staff_csh_id uuid := pg_temp.get_ctx('staff_csh_id');
+  v_staff_other_branch_id uuid := pg_temp.get_ctx('staff_other_branch_id');
+  v_session_a_id uuid := pg_temp.get_ctx('session_a_id');
+  v_session_b_id uuid := pg_temp.get_ctx('session_b_id');
+  v_session_unattributed_id uuid := pg_temp.get_ctx('session_unattributed_id');
+  v_tx_a_id uuid := pg_temp.get_ctx('tx_a_id');
+  v_tx_b_id uuid := pg_temp.get_ctx('tx_b_id');
+  v_tx_unattributed_id uuid := pg_temp.get_ctx('tx_unattributed_id');
+
+  v_count integer;
+  v_analytics jsonb;
+  v_error_thrown boolean;
+  v_error_message text;
+BEGIN
+  -- Prove current_user is genuinely 'authenticated'
+  IF current_user <> 'authenticated' THEN
+    RAISE EXCEPTION 'RLS Test environment error: current_user is % instead of authenticated', current_user;
   END IF;
 
-  SELECT count(*) INTO v_count FROM public.branches WHERE id = v_multi_branch_b_id;
+  PERFORM pg_temp.set_test_auth(v_manager_id);
+
+  IF auth.uid() <> v_manager_id THEN
+    RAISE EXCEPTION 'RLS Test environment error: auth.uid() is % instead of manager_id %', auth.uid(), v_manager_id;
+  END IF;
+
+  RAISE NOTICE '[TEST 5] Testing RLS queries under Manager context (role: %, auth.uid: %)...',
+    current_user, auth.uid();
+
+  -- 5a. Branch Read Isolation
+  SELECT count(*) INTO v_count FROM public.branches WHERE business_id = v_multi_biz_id;
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'TEST 5a FAILED: Manager saw % branches, expected exactly 1 (assigned Branch A)', v_count;
+  END IF;
+
+  SELECT count(*) INTO v_count FROM public.branches WHERE id = v_branch_b_id;
   IF v_count <> 0 THEN
     RAISE EXCEPTION 'TEST 5a FAILED: Manager was able to select unassigned Branch B!';
   END IF;
 
-  -- 5b. Staff read isolation
-  -- Manager should see self + staff assigned to Branch A (Cashier A). Should NOT see Cashier B.
+  -- 5b. Staff Read Isolation
   SELECT count(*) INTO v_count FROM public.staff_members WHERE id = v_staff_mgr_id;
   IF v_count <> 1 THEN
     RAISE EXCEPTION 'TEST 5b FAILED: Manager cannot read their own staff record';
@@ -448,7 +489,7 @@ BEGIN
 
   SELECT count(*) INTO v_count FROM public.staff_members WHERE id = v_staff_csh_id;
   IF v_count <> 1 THEN
-    RAISE EXCEPTION 'TEST 5b FAILED: Manager cannot read staff in same branch';
+    RAISE EXCEPTION 'TEST 5b FAILED: Manager cannot read co-worker in assigned Branch A';
   END IF;
 
   SELECT count(*) INTO v_count FROM public.staff_members WHERE id = v_staff_other_branch_id;
@@ -456,18 +497,18 @@ BEGIN
     RAISE EXCEPTION 'TEST 5b FAILED: Manager was able to select staff from unassigned Branch B!';
   END IF;
 
-  -- 5c. Staff Branch Assignments read isolation
-  SELECT count(*) INTO v_count FROM public.staff_branch_assignments WHERE branch_id = v_multi_branch_a_id;
+  -- 5c. Staff Branch Assignments Read Isolation
+  SELECT count(*) INTO v_count FROM public.staff_branch_assignments WHERE branch_id = v_branch_a_id;
   IF v_count < 1 THEN
-    RAISE EXCEPTION 'TEST 5c FAILED: Manager cannot read assignments for assigned branch';
+    RAISE EXCEPTION 'TEST 5c FAILED: Manager cannot read assignments for assigned Branch A';
   END IF;
 
-  SELECT count(*) INTO v_count FROM public.staff_branch_assignments WHERE branch_id = v_multi_branch_b_id;
+  SELECT count(*) INTO v_count FROM public.staff_branch_assignments WHERE branch_id = v_branch_b_id;
   IF v_count <> 0 THEN
     RAISE EXCEPTION 'TEST 5c FAILED: Manager was able to select assignments for unassigned Branch B!';
   END IF;
 
-  -- 5d. Cashier Sessions read isolation
+  -- 5d. Cashier Sessions Read Isolation
   SELECT count(*) INTO v_count FROM public.cashier_sessions WHERE id = v_session_a_id;
   IF v_count <> 1 THEN
     RAISE EXCEPTION 'TEST 5d FAILED: Manager cannot read cashier session for assigned Branch A';
@@ -483,7 +524,7 @@ BEGIN
     RAISE EXCEPTION 'TEST 5d FAILED: Manager was able to select unattributed cashier session!';
   END IF;
 
-  -- 5e. Transactions read isolation
+  -- 5e. Transactions Read Isolation
   SELECT count(*) INTO v_count FROM public.pass_transactions WHERE id = v_tx_a_id;
   IF v_count <> 1 THEN
     RAISE EXCEPTION 'TEST 5e FAILED: Manager cannot read transaction for assigned Branch A';
@@ -498,29 +539,25 @@ BEGIN
   IF v_count <> 0 THEN
     RAISE EXCEPTION 'TEST 5e FAILED: Manager was able to select unattributed transaction!';
   END IF;
+  RAISE NOTICE '  PASS: Manager read isolation verified under PostgreSQL "authenticated" role (zero recursion).';
 
-  RAISE NOTICE '  PASS: Manager read isolation on branches, staff, assignments, sessions, and transactions verified with zero recursion.';
-
-  -- ----------------------------------------------------------------------------
-  -- TEST 6: Manager Mutation Isolation (operations_upsert_branch)
-  -- ----------------------------------------------------------------------------
-  RAISE NOTICE '[TEST 6] Verifying Manager mutation isolation via RPC...';
-
-  -- 6a. Manager updating assigned Branch A -> SUCCEEDS
+  -- 5f. Manager Mutation Isolation
+  RAISE NOTICE '[TEST 6] Testing Manager mutation isolation via RPC under authenticated role...';
+  -- Mutating assigned Branch A succeeds
   PERFORM public.operations_upsert_branch(
     _business_id := v_multi_biz_id,
-    _branch_id := v_multi_branch_a_id,
+    _branch_id := v_branch_a_id,
     _code := 'main',
     _name_ar := 'الفرع الرئيسي المحدث',
     _name_en := 'Updated Main Branch'
   );
 
-  -- 6b. Manager updating unassigned Branch B -> FAILS
+  -- Mutating unassigned Branch B fails
   v_error_thrown := false;
   BEGIN
     PERFORM public.operations_upsert_branch(
       _business_id := v_multi_biz_id,
-      _branch_id := v_multi_branch_b_id,
+      _branch_id := v_branch_b_id,
       _code := 'branch-b-hacked',
       _name_ar := 'فرع مخترق',
       _name_en := 'Hacked Branch'
@@ -531,10 +568,10 @@ BEGIN
   END;
 
   IF NOT v_error_thrown OR v_error_message NOT LIKE '%Branch update denied%' THEN
-    RAISE EXCEPTION 'TEST 6b FAILED: Manager was able to update unassigned branch (error: %)', v_error_message;
+    RAISE EXCEPTION 'TEST 6b FAILED: Manager updated unassigned branch under authenticated role (error: %)', v_error_message;
   END IF;
 
-  -- 6c. Manager creating new branch -> FAILS
+  -- Creating new branch fails
   v_error_thrown := false;
   BEGIN
     PERFORM public.operations_upsert_branch(
@@ -550,30 +587,84 @@ BEGIN
   END;
 
   IF NOT v_error_thrown OR v_error_message NOT LIKE '%Branch creation denied%' THEN
-    RAISE EXCEPTION 'TEST 6c FAILED: Manager was able to create a branch (error: %)', v_error_message;
+    RAISE EXCEPTION 'TEST 6c FAILED: Manager created new branch under authenticated role (error: %)', v_error_message;
+  END IF;
+  RAISE NOTICE '  PASS: Manager mutation restrictions verified under PostgreSQL "authenticated" role.';
+
+  -- 5g. Manager Analytics Scoping
+  RAISE NOTICE '[TEST 9] Testing Manager analytics scoping under authenticated role...';
+  v_analytics := public.business_analytics(
+    _business_id := v_multi_biz_id,
+    _date_from := current_date - 1,
+    _date_to := current_date + 1
+  );
+
+  IF (v_analytics->'summary'->>'totalTransactions')::integer <> 1 THEN
+    RAISE EXCEPTION 'TEST 9a FAILED: Manager analytics totalTransactions should be 1 (Branch A only), got %',
+      v_analytics->'summary'->>'totalTransactions';
   END IF;
 
-  RAISE NOTICE '  PASS: Manager cannot update unassigned branches or create branches.';
+  IF jsonb_path_exists(v_analytics, '$.filters.branches[*] ? (@.id == $id)', jsonb_build_object('id', v_branch_b_id)) THEN
+    RAISE EXCEPTION 'TEST 9a FAILED: Unassigned Branch B leaked into Manager analytics filter list!';
+  END IF;
 
-  -- ----------------------------------------------------------------------------
-  -- TEST 7: Cashier Denials
-  -- ----------------------------------------------------------------------------
-  RAISE NOTICE '[TEST 7] Verifying Cashier restrictions...';
+  v_error_thrown := false;
+  BEGIN
+    PERFORM public.business_analytics(
+      _business_id := v_multi_biz_id,
+      _date_from := current_date - 1,
+      _date_to := current_date + 1,
+      _branch_id := v_branch_b_id
+    );
+  EXCEPTION WHEN OTHERS THEN
+    v_error_thrown := true;
+    v_error_message := SQLERRM;
+  END;
 
-  PERFORM pg_temp.set_test_auth(v_cashier_user_id);
+  IF NOT v_error_thrown OR v_error_message NOT LIKE '%Analytics access denied%' THEN
+    RAISE EXCEPTION 'TEST 9b FAILED: Manager requested analytics for unassigned Branch B! (error: %)', v_error_message;
+  END IF;
+  RAISE NOTICE '  PASS: Manager analytics scoping verified under PostgreSQL "authenticated" role.';
+END $$;
 
-  -- 7a. Cashier cannot view cashier sessions
+RESET ROLE;
+
+-- ------------------------------------------------------------------------------
+-- 3. CASHIER RESTRICTIONS: Genuine RLS Execution as role "authenticated"
+-- ------------------------------------------------------------------------------
+SET LOCAL ROLE authenticated;
+
+DO $$
+DECLARE
+  v_cashier_id uuid := pg_temp.get_ctx('cashier_id');
+  v_multi_biz_id uuid := pg_temp.get_ctx('multi_biz_id');
+  v_branch_a_id uuid := pg_temp.get_ctx('branch_a_id');
+
+  v_count integer;
+  v_role text;
+  v_can_manage boolean;
+  v_can_manage_biz boolean;
+  v_error_thrown boolean;
+BEGIN
+  IF current_user <> 'authenticated' THEN
+    RAISE EXCEPTION 'RLS Test environment error: current_user is % instead of authenticated', current_user;
+  END IF;
+
+  PERFORM pg_temp.set_test_auth(v_cashier_id);
+  RAISE NOTICE '[TEST 7] Testing Cashier restrictions under authenticated role (auth.uid: %)...', auth.uid();
+
+  -- Cashier cannot read cashier_sessions table directly
   SELECT count(*) INTO v_count FROM public.cashier_sessions WHERE business_id = v_multi_biz_id;
   IF v_count <> 0 THEN
-    RAISE EXCEPTION 'TEST 7a FAILED: Cashier was able to read cashier_sessions table directly!';
+    RAISE EXCEPTION 'TEST 7a FAILED: Cashier read % rows from cashier_sessions table!', v_count;
   END IF;
 
-  -- 7b. Cashier cannot update branch
+  -- Cashier cannot mutate branch
   v_error_thrown := false;
   BEGIN
     PERFORM public.operations_upsert_branch(
       _business_id := v_multi_biz_id,
-      _branch_id := v_multi_branch_a_id,
+      _branch_id := v_branch_a_id,
       _code := 'main',
       _name_ar := 'كاشير يحاول التعديل',
       _name_en := 'Cashier Attempt'
@@ -583,10 +674,10 @@ BEGIN
   END;
 
   IF NOT v_error_thrown THEN
-    RAISE EXCEPTION 'TEST 7b FAILED: Cashier was able to mutate a branch!';
+    RAISE EXCEPTION 'TEST 7b FAILED: Cashier was able to mutate branch!';
   END IF;
 
-  -- 7c. Cashier cannot manage staff
+  -- Cashier cannot manage staff
   v_error_thrown := false;
   BEGIN
     PERFORM public.operations_upsert_staff(
@@ -606,7 +697,7 @@ BEGIN
     RAISE EXCEPTION 'TEST 7c FAILED: Cashier was able to call operations_upsert_staff!';
   END IF;
 
-  -- 7d. Cashier operations_access returns role cashier, can_manage false
+  -- operations_access returns role cashier, can_manage false
   SELECT operational_role, can_manage, can_manage_business
   INTO v_role, v_can_manage, v_can_manage_biz
   FROM public.operations_access(v_multi_biz_id);
@@ -615,41 +706,59 @@ BEGIN
     RAISE EXCEPTION 'TEST 7d FAILED: Cashier operations_access returned invalid permissions (role: %, can_manage: %)',
       v_role, v_can_manage;
   END IF;
+  RAISE NOTICE '  PASS: Cashier restrictions verified under PostgreSQL "authenticated" role.';
+END $$;
 
-  RAISE NOTICE '  PASS: Cashier operational restrictions verified.';
+RESET ROLE;
 
-  -- ----------------------------------------------------------------------------
-  -- TEST 8: Owner Access & Cross-Business Isolation
-  -- ----------------------------------------------------------------------------
-  RAISE NOTICE '[TEST 8] Verifying Owner access and cross-business isolation...';
+-- ------------------------------------------------------------------------------
+-- 4. OWNER VISIBILITY & CROSS-TENANT ISOLATION: Role "authenticated"
+-- ------------------------------------------------------------------------------
+SET LOCAL ROLE authenticated;
 
-  PERFORM pg_temp.set_test_auth(v_owner_user_id);
+DO $$
+DECLARE
+  v_owner_id uuid := pg_temp.get_ctx('owner_id');
+  v_multi_biz_id uuid := pg_temp.get_ctx('multi_biz_id');
+  v_other_biz_id uuid := pg_temp.get_ctx('other_biz_id');
+  v_other_branch_id uuid := pg_temp.get_ctx('other_branch_id');
 
-  -- 8a. Owner can read all own branches (10 total)
+  v_count integer;
+  v_analytics jsonb;
+  v_error_thrown boolean;
+BEGIN
+  IF current_user <> 'authenticated' THEN
+    RAISE EXCEPTION 'RLS Test environment error: current_user is % instead of authenticated', current_user;
+  END IF;
+
+  PERFORM pg_temp.set_test_auth(v_owner_id);
+  RAISE NOTICE '[TEST 8] Testing Owner visibility and cross-tenant isolation (auth.uid: %)...', auth.uid();
+
+  -- Owner reads all 10 branches in their business
   SELECT count(*) INTO v_count FROM public.branches WHERE business_id = v_multi_biz_id;
   IF v_count <> 10 THEN
-    RAISE EXCEPTION 'TEST 8a FAILED: Owner should see 10 branches, saw %', v_count;
+    RAISE EXCEPTION 'TEST 8a FAILED: Owner saw % branches, expected 10', v_count;
   END IF;
 
-  -- 8b. Owner can read all sessions (including unattributed)
+  -- Owner reads all 3 sessions (including legacy unattributed)
   SELECT count(*) INTO v_count FROM public.cashier_sessions WHERE business_id = v_multi_biz_id;
   IF v_count <> 3 THEN
-    RAISE EXCEPTION 'TEST 8b FAILED: Owner should see 3 sessions, saw %', v_count;
+    RAISE EXCEPTION 'TEST 8b FAILED: Owner saw % sessions, expected 3', v_count;
   END IF;
 
-  -- 8c. Owner can read all transactions (including unattributed)
+  -- Owner reads all 3 transactions (including legacy unattributed)
   SELECT count(*) INTO v_count FROM public.pass_transactions WHERE business_id = v_multi_biz_id;
   IF v_count <> 3 THEN
-    RAISE EXCEPTION 'TEST 8c FAILED: Owner should see 3 transactions, saw %', v_count;
+    RAISE EXCEPTION 'TEST 8c FAILED: Owner saw % transactions, expected 3', v_count;
   END IF;
 
-  -- 8d. Cross-business isolation: Owner querying competitor business
+  -- Cross-tenant isolation: Owner reads 0 branches from competitor
   SELECT count(*) INTO v_count FROM public.branches WHERE business_id = v_other_biz_id;
   IF v_count <> 0 THEN
     RAISE EXCEPTION 'TEST 8d FAILED: Owner was able to view competitor branches!';
   END IF;
 
-  -- 8e. Owner mutating competitor branch fails
+  -- Cross-tenant mutation denied
   v_error_thrown := false;
   BEGIN
     PERFORM public.operations_upsert_branch(
@@ -664,55 +773,10 @@ BEGIN
   END;
 
   IF NOT v_error_thrown THEN
-    RAISE EXCEPTION 'TEST 8e FAILED: Owner was able to mutate a competitor branch!';
+    RAISE EXCEPTION 'TEST 8e FAILED: Owner was able to mutate competitor branch!';
   END IF;
 
-  RAISE NOTICE '  PASS: Owner access and cross-business tenant isolation verified.';
-
-  -- ----------------------------------------------------------------------------
-  -- TEST 9: Manager Analytics Isolation (business_analytics RPC)
-  -- ----------------------------------------------------------------------------
-  RAISE NOTICE '[TEST 9] Verifying Manager Analytics scoping in business_analytics...';
-
-  PERFORM pg_temp.set_test_auth(v_manager_user_id);
-
-  -- 9a. Unfiltered analytics under Manager context returns ONLY Branch A
-  v_analytics := public.business_analytics(
-    _business_id := v_multi_biz_id,
-    _date_from := current_date - 1,
-    _date_to := current_date + 1
-  );
-
-  IF (v_analytics->'summary'->>'totalTransactions')::integer <> 1 THEN
-    RAISE EXCEPTION 'TEST 9a FAILED: Manager analytics totalTransactions should be 1 (Location A only), got %',
-      v_analytics->'summary'->>'totalTransactions';
-  END IF;
-
-  -- Location B must NOT appear in filters.branches
-  IF jsonb_path_exists(v_analytics, '$.filters.branches[*] ? (@.id == $id)', jsonb_build_object('id', v_multi_branch_b_id)) THEN
-    RAISE EXCEPTION 'TEST 9a FAILED: Unassigned Branch B leaked into Manager analytics filter list!';
-  END IF;
-
-  -- 9b. Manager attempting to query analytics explicitly for unassigned Branch B -> FAILS
-  v_error_thrown := false;
-  BEGIN
-    PERFORM public.business_analytics(
-      _business_id := v_multi_biz_id,
-      _date_from := current_date - 1,
-      _date_to := current_date + 1,
-      _branch_id := v_multi_branch_b_id
-    );
-  EXCEPTION WHEN OTHERS THEN
-    v_error_thrown := true;
-    v_error_message := SQLERRM;
-  END;
-
-  IF NOT v_error_thrown OR v_error_message NOT LIKE '%Analytics access denied%' THEN
-    RAISE EXCEPTION 'TEST 9b FAILED: Manager was able to request analytics for unassigned Branch B! (error: %)', v_error_message;
-  END IF;
-
-  -- 9c. Owner analytics sees all transactions (Location A + Location B + unattributed = 3)
-  PERFORM pg_temp.set_test_auth(v_owner_user_id);
+  -- Owner Analytics sees all transactions (Branch A + Branch B + unattributed = 3)
   v_analytics := public.business_analytics(
     _business_id := v_multi_biz_id,
     _date_from := current_date - 1,
@@ -720,16 +784,17 @@ BEGIN
   );
 
   IF (v_analytics->'summary'->>'totalTransactions')::integer <> 3 THEN
-    RAISE EXCEPTION 'TEST 9c FAILED: Owner analytics should see 3 transactions, got %',
+    RAISE EXCEPTION 'TEST 8f FAILED: Owner analytics should see 3 transactions, got %',
       v_analytics->'summary'->>'totalTransactions';
   END IF;
-
-  RAISE NOTICE '  PASS: Manager analytics strictly scoped; unassigned data and branches completely hidden.';
+  RAISE NOTICE '  PASS: Owner full visibility and cross-tenant isolation verified under "authenticated" role.';
 
   RAISE NOTICE '==============================================================';
   RAISE NOTICE 'ALL PHASE 1 CERTIFICATION TESTS PASSED SUCCESSFULLY!';
+  RAISE NOTICE 'All tests executed under authenticated RLS role with zero errors.';
   RAISE NOTICE '==============================================================';
-
 END $$;
+
+RESET ROLE;
 
 ROLLBACK;

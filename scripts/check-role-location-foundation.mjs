@@ -119,6 +119,9 @@ assert.ok(!testSuite.includes("is_active"), "Test suite must not reference fake 
 assert.ok(!testSuite.includes("deleted_at"), "Test suite must not reference fake deleted_at column");
 assert.ok(!testSuite.includes("businesses.name"), "Test suite must not reference fake businesses.name column");
 assert.ok(testSuite.includes("public.branches FORCE ROW LEVEL SECURITY"), "Test suite must enforce RLS testing");
+assert.ok(testSuite.includes("SET LOCAL ROLE authenticated"), "Test suite must execute tests under authenticated role");
+assert.ok(testSuite.includes("current_user <> 'authenticated'"), "Test suite must verify current_user is authenticated");
+assert.ok(testSuite.includes("RESET ROLE"), "Test suite must safely reset role");
 assert.ok(testSuite.includes("[TEST 1]"), "Test suite must include Test 1");
 assert.ok(testSuite.includes("[TEST 2]"), "Test suite must include Test 2");
 assert.ok(testSuite.includes("[TEST 3]"), "Test suite must include Test 3");
