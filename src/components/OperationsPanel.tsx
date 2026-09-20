@@ -185,6 +185,32 @@ export function OperationsPanel({ businessId, ar }: { businessId: string; ar: bo
     },
   });
 
+  // Authoritative server/database location entitlement query
+  const entitlementQuery = useQuery({
+    queryKey: ["business-location-entitlement", businessId],
+    enabled: accessQuery.isSuccess,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .rpc("business_location_entitlement", { _business_id: businessId })
+        .single();
+      if (error) {
+        return getLocationEntitlement(rawData.plan);
+      }
+      const row = data as {
+        plan?: string;
+        max_locations?: number;
+        multi_location?: boolean;
+        location_comparison?: boolean;
+      } | null;
+      return {
+        plan: row?.plan ?? rawData.plan,
+        maxLocations: Number(row?.max_locations ?? 1),
+        multiLocation: Boolean(row?.multi_location),
+        locationComparison: Boolean(row?.location_comparison),
+      };
+    },
+  });
+
   const access = accessQuery.data;
   const canManageBiz = canManageBusiness(access);
   const userCanManageBranch = (branchId: string) => canManageBranch(branchId, access);
@@ -235,9 +261,9 @@ export function OperationsPanel({ businessId, ar }: { businessId: string; ar: bo
   );
   const staffById = useMemo(() => new Map(rawData.staff.map((s) => [s.id, s])), [rawData.staff]);
 
-  const entitlement = getLocationEntitlement(rawData.plan);
   const activeBranchesCount = rawData.branches.filter((b) => b.status === "active").length;
-  const atLocationLimit = !canAddLocation(activeBranchesCount, rawData.plan);
+  const entitlement = entitlementQuery.data ?? getLocationEntitlement(rawData.plan);
+  const atLocationLimit = activeBranchesCount >= entitlement.maxLocations;
 
   const selectedBranch = selectedBranchId ? branchById.get(selectedBranchId) : null;
 
@@ -333,7 +359,7 @@ export function OperationsPanel({ businessId, ar }: { businessId: string; ar: bo
       addressEn: "",
       status: "active",
     });
-    await operationsQuery.refetch();
+    await Promise.all([operationsQuery.refetch(), entitlementQuery.refetch()]);
   }
 
   // Save Team Member Handler

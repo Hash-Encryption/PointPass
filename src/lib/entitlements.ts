@@ -1,13 +1,11 @@
 /**
- * Centralized location entitlement configuration and helpers.
+ * Location entitlement types and fallback formatters.
  *
- * Conceptual model:
- *   single_location: maxLocations = 1, multiLocation = false, locationComparison = false
- *   multi_location: maxLocations = CONFIGURED_MULTI_LIMIT (10), multiLocation = true, locationComparison = true
+ * NOTE: The PostgreSQL function `public.business_location_entitlement(...)`
+ * is the authoritative source of truth for location limits, enforced concurrently
+ * with transactional advisory locks in database triggers.
  *
- * Legacy plan compatibility:
- *   starter -> single_location (1)
- *   growth, enterprise, multi_location -> multi_location (10)
+ * This client helper provides TypeScript interfaces and fallback formatting for UI display.
  */
 
 export const CONFIGURED_MULTI_LIMIT = 10;

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import { inviteMerchantAndCreateBusiness } from "@/lib/admin.functions";
+import { AVAILABLE_PLANS } from "@/lib/plans";
 import { useLocale } from "@/lib/i18n";
 import { PortalNav } from "@/components/PortalNav";
 import { AuthSignIn } from "@/components/AuthSignIn";
@@ -402,9 +403,11 @@ function AdminPortal() {
                   value={newBusiness.plan}
                   onChange={(event) => setNewBusiness({ ...newBusiness, plan: event.target.value })}
                 >
-                  <option value="starter">Starter</option>
-                  <option value="growth">Growth</option>
-                  <option value="enterprise">Enterprise</option>
+                  {AVAILABLE_PLANS.map((p) => (
+                    <option key={p.code} value={p.code}>
+                      {ar ? p.nameAr : p.nameEn}
+                    </option>
+                  ))}
                 </select>
               </div>
               <div className="lg:col-span-6">

@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as DashboardRouteImport } from './routes/dashboard'
+import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as ScanRouteImport } from './routes/scan'
 import { Route as JoinSlugRouteImport } from './routes/join.$slug'
 
@@ -30,6 +31,11 @@ const DashboardRoute = DashboardRouteImport.update({
   path: '/dashboard',
   getParentRoute: () => rootRouteImport,
 } as any)
+const OnboardingRoute = OnboardingRouteImport.update({
+  id: '/onboarding',
+  path: '/onboarding',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ScanRoute = ScanRouteImport.update({
   id: '/scan',
   path: '/scan',
@@ -45,6 +51,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
   '/dashboard': typeof DashboardRoute
+  '/onboarding': typeof OnboardingRoute
   '/scan': typeof ScanRoute
   '/join/$slug': typeof JoinSlugRoute
 }
@@ -52,6 +59,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
   '/dashboard': typeof DashboardRoute
+  '/onboarding': typeof OnboardingRoute
   '/scan': typeof ScanRoute
   '/join/$slug': typeof JoinSlugRoute
 }
@@ -60,21 +68,31 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
   '/dashboard': typeof DashboardRoute
+  '/onboarding': typeof OnboardingRoute
   '/scan': typeof ScanRoute
   '/join/$slug': typeof JoinSlugRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/admin' | '/dashboard' | '/scan' | '/join/$slug'
+  fullPaths:
+    '/' | '/admin' | '/dashboard' | '/onboarding' | '/scan' | '/join/$slug'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/admin' | '/dashboard' | '/scan' | '/join/$slug'
-  id: '__root__' | '/' | '/admin' | '/dashboard' | '/scan' | '/join/$slug'
+  to: '/' | '/admin' | '/dashboard' | '/onboarding' | '/scan' | '/join/$slug'
+  id:
+    | '__root__'
+    | '/'
+    | '/admin'
+    | '/dashboard'
+    | '/onboarding'
+    | '/scan'
+    | '/join/$slug'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminRoute: typeof AdminRoute
   DashboardRoute: typeof DashboardRoute
+  OnboardingRoute: typeof OnboardingRoute
   ScanRoute: typeof ScanRoute
   JoinSlugRoute: typeof JoinSlugRoute
 }
@@ -102,6 +120,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/onboarding': {
+      id: '/onboarding'
+      path: '/onboarding'
+      fullPath: '/onboarding'
+      preLoaderRoute: typeof OnboardingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/scan': {
       id: '/scan'
       path: '/scan'
@@ -123,6 +148,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRoute: AdminRoute,
   DashboardRoute: DashboardRoute,
+  OnboardingRoute: OnboardingRoute,
   ScanRoute: ScanRoute,
   JoinSlugRoute: JoinSlugRoute,
 }

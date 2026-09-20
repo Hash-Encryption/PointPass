@@ -11,6 +11,7 @@ import { OwnerOverview } from "@/components/dashboard/OwnerOverview";
 import { ManagerOverview } from "@/components/dashboard/ManagerOverview";
 import { CustomersPanel } from "@/components/dashboard/CustomersPanel";
 import { JoinQrPanel } from "@/components/dashboard/JoinQrPanel";
+import { PlanBillingPanel } from "@/components/dashboard/PlanBillingPanel";
 import { PassPreview, type PassDesign } from "@/components/PassPreview";
 import { useLocale } from "@/lib/i18n";
 import { supabase } from "@/lib/supabase";
@@ -29,6 +30,7 @@ import {
   AlertTriangle,
   Building2,
   Copy,
+  CreditCard,
   Download,
   Edit3,
   ExternalLink,
@@ -252,6 +254,20 @@ function MerchantDashboard() {
     },
   });
 
+  const onboardingQuery = useQuery({
+    queryKey: ["dashboard-onboarding-check", business?.id],
+    enabled: Boolean(business?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("business_onboarding")
+        .select("step,completed")
+        .eq("business_id", business!.id)
+        .maybeSingle();
+      if (error) return null;
+      return data as { step: string; completed: boolean } | null;
+    },
+  });
+
   const operationalRole = accessQuery.data?.operational_role;
   const isOwnerUser = isOwner(operationalRole);
   const isManagerUser = isManager(operationalRole);
@@ -305,7 +321,8 @@ function MerchantDashboard() {
         activeTab === "pin" ||
         activeTab === "geo" ||
         activeTab === "push" ||
-        activeTab === "qr")
+        activeTab === "qr" ||
+        activeTab === "billing")
     ) {
       setActiveTab("overview");
     }
@@ -488,6 +505,11 @@ function MerchantDashboard() {
     return <Navigate to="/admin" replace />;
   }
 
+  // Phase 4: A genuine new user without any business relationship enters onboarding
+  if (businessesQuery.isSuccess && businesses.length === 0) {
+    return <Navigate to="/onboarding" replace />;
+  }
+
   if (adminRoleQuery.isError || businessesQuery.isError || !business) {
     return (
       <div className="grid min-h-screen place-items-center bg-background px-4">
@@ -513,6 +535,16 @@ function MerchantDashboard() {
 
   if (accessQuery.isSuccess && isCashierUser) {
     return <Navigate to="/scan" replace />;
+  }
+
+  // Phase 4: An Owner with an incomplete onboarding business resumes onboarding
+  if (
+    isOwnerUser &&
+    onboardingQuery.isSuccess &&
+    onboardingQuery.data &&
+    !onboardingQuery.data.completed
+  ) {
+    return <Navigate to="/onboarding" replace />;
   }
 
   return (
@@ -645,6 +677,10 @@ function MerchantDashboard() {
                 </TabsTrigger>
                 <TabsTrigger value="push">{t("campaigns")}</TabsTrigger>
                 <TabsTrigger value="geo">{t("geofence")}</TabsTrigger>
+                <TabsTrigger value="billing">
+                  <CreditCard className="me-1.5 size-4" />
+                  {t("planAndBilling")}
+                </TabsTrigger>
               </>
             ) : null}
           </TabsList>
@@ -1050,6 +1086,13 @@ function MerchantDashboard() {
           <TabsContent value="analytics" className="mt-4">
             <AnalyticsPanel key={business.id} businessId={business.id} ar={ar} />
           </TabsContent>
+
+          {/* Owner Plan & Billing Tab */}
+          {isOwnerUser ? (
+            <TabsContent value="billing" className="mt-4">
+              <PlanBillingPanel businessId={business.id} ar={ar} />
+            </TabsContent>
+          ) : null}
         </Tabs>
 
         {/* Campaign Delete/Reset Confirmation Modal */}
