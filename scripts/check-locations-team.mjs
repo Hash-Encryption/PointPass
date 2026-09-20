@@ -53,7 +53,7 @@ assert.ok(
   "Admin/staff/owner must never be casually mapped as new role choices",
 );
 
-// 3. Technical Code Cleanup: Not required visible form fields
+// 3. Technical Code Cleanup: Not required visible form fields; Server is authoritative for internal codes
 assert.ok(
   !panel.includes('label={ar ? "رمز الفرع" : "Branch code"}'),
   "Branch code must not be a normal visible form field for owners",
@@ -63,12 +63,20 @@ assert.ok(
   "Staff code must not be a normal visible form field for owners",
 );
 assert.ok(
-  panel.includes("generateInternalBranchCode"),
-  "Must auto-generate branch internal codes safely",
+  !panel.includes("generateInternalBranchCode"),
+  "Client-side branch code generation must be removed (server is authoritative)",
 );
 assert.ok(
-  panel.includes("generateInternalStaffCode"),
-  "Must auto-generate staff internal codes safely",
+  !panel.includes("generateInternalStaffCode"),
+  "Client-side staff code generation must be removed (server is authoritative)",
+);
+assert.ok(
+  !panel.includes("Math.random"),
+  "Client-side code generation with Math.random must be absent from OperationsPanel",
+);
+assert.ok(
+  !panel.includes("Fallback sequential execution with compensation"),
+  "Unsafe sequential fallback in handleSaveTeamMember must be removed",
 );
 
 // 4. Legacy Role Compatibility: Displayed safely with human labels
@@ -159,9 +167,46 @@ assert.ok(
   migration.includes("public.user_can_access_staff(auth.uid(), s.id)"),
   "PIN status query must enforce Phase 1 user_can_access_staff",
 );
+assert.ok(
+  migration.includes(
+    "revoke all on function public.generate_branch_code(uuid, text) from public, anon, authenticated;",
+  ),
+  "generate_branch_code must be revoked from public, anon, authenticated",
+);
+assert.ok(
+  migration.includes(
+    "grant execute on function public.generate_branch_code(uuid, text) to service_role;",
+  ),
+  "generate_branch_code must be granted only to service_role",
+);
+assert.ok(
+  migration.includes(
+    "revoke all on function public.generate_staff_code(uuid, text, text) from public, anon, authenticated;",
+  ),
+  "generate_staff_code must be revoked from public, anon, authenticated",
+);
+assert.ok(
+  migration.includes(
+    "grant execute on function public.generate_staff_code(uuid, text, text) to service_role;",
+  ),
+  "generate_staff_code must be granted only to service_role",
+);
+assert.ok(
+  migration.includes("can_manage_branch(auth.uid(), b.id)"),
+  "operations_staff_pin_status must restrict access to business owners and active branch managers",
+);
+assert.ok(
+  migration.includes("revoked_at = coalesce(revoked_at, now())"),
+  "operations_save_team_member must revoke cashier sessions when branch assignments are removed",
+);
 
 // 11. SQL Verification Suite Exists and is Comprehensive
-assert.ok(sqlSuite.includes("plan(10)"), "SQL suite must declare expected test plan");
+assert.ok(sqlSuite.includes("SET LOCAL ROLE anon;"), "SQL suite must test anon role denials");
+assert.ok(
+  sqlSuite.includes("SET LOCAL ROLE authenticated;"),
+  "SQL suite must test authenticated role actions",
+);
+assert.ok(sqlSuite.includes("ROLLBACK;"), "SQL suite must run in transaction and rollback cleanly");
 assert.ok(
   sqlSuite.includes("operations_staff_pin_status"),
   "SQL suite must test operations_staff_pin_status",
@@ -169,6 +214,14 @@ assert.ok(
 assert.ok(
   sqlSuite.includes("operations_save_team_member"),
   "SQL suite must test operations_save_team_member",
+);
+assert.ok(
+  sqlSuite.includes("generate_branch_code"),
+  "SQL suite must test generate_branch_code permissions",
+);
+assert.ok(
+  sqlSuite.includes("generate_staff_code"),
+  "SQL suite must test generate_staff_code permissions",
 );
 
 console.log("All Phase 2 Locations & Team contract checks passed successfully.");

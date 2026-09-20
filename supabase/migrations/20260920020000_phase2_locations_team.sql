@@ -6,7 +6,8 @@ begin;
 
 -- 1. Safe PIN-configured status projection
 -- Does not return pin_hash, secret tokens, or throttle records.
--- Restricted to authorized business staff members accessible to the caller.
+-- Restricted to Owner/Admin and active Managers for branches they manage.
+-- Denies Cashiers and cross-business callers.
 create or replace function public.operations_staff_pin_status(_business_id uuid)
 returns table (staff_id uuid, pin_configured boolean)
 language plpgsql
@@ -17,15 +18,12 @@ begin
   if not (
     public.can_manage_business(auth.uid(), _business_id)
     or exists (
-      select 1 from public.staff_branch_assignments a
-      where a.business_id = _business_id
-        and a.staff_id in (
-          select s.id from public.staff_members s
-          where s.business_id = _business_id and s.auth_user_id = auth.uid()
-        )
+      select 1 from public.branches b
+      where b.business_id = _business_id
+        and public.can_manage_branch(auth.uid(), b.id)
     )
   ) then
-    raise exception 'Access denied to business staff';
+    raise exception 'Access denied to business staff PIN status';
   end if;
 
   return query
@@ -45,6 +43,8 @@ revoke all on function public.operations_staff_pin_status(uuid) from public, ano
 grant execute on function public.operations_staff_pin_status(uuid) to authenticated, service_role;
 
 -- 2. Safe internal code generator helpers
+-- Revoked from public, anon, and authenticated; granted only to service_role.
+-- Called by security definer operations functions. Internal defense-in-depth authorization check included.
 create or replace function public.generate_branch_code(
   _business_id uuid,
   _name text default null
@@ -59,6 +59,10 @@ declare
   _candidate text;
   _idx integer := 1;
 begin
+  if auth.uid() is not null and not public.can_manage_business(auth.uid(), _business_id) then
+    raise exception 'Access denied to generate branch code';
+  end if;
+
   _base := lower(regexp_replace(coalesce(trim(_name), ''), '[^a-zA-Z0-9]+', '-', 'g'));
   _base := trim(both '-' from _base);
   if length(_base) < 2 or length(_base) > 24 then
@@ -97,6 +101,10 @@ declare
   _candidate text;
   _idx integer := 1;
 begin
+  if auth.uid() is not null and not public.can_manage_business(auth.uid(), _business_id) then
+    raise exception 'Access denied to generate staff code';
+  end if;
+
   _candidate := _prefix || '-' || _idx::text;
   while exists (
     select 1 from public.staff_members
@@ -114,8 +122,11 @@ begin
 end;
 $$;
 
-grant execute on function public.generate_branch_code(uuid, text) to authenticated, service_role;
-grant execute on function public.generate_staff_code(uuid, text, text) to authenticated, service_role;
+revoke all on function public.generate_branch_code(uuid, text) from public, anon, authenticated;
+grant execute on function public.generate_branch_code(uuid, text) to service_role;
+
+revoke all on function public.generate_staff_code(uuid, text, text) from public, anon, authenticated;
+grant execute on function public.generate_staff_code(uuid, text, text) to service_role;
 
 -- 3. Enhance operations_upsert_branch to safely auto-generate internal code when omitted
 create or replace function public.operations_upsert_branch(
@@ -190,6 +201,9 @@ begin
 end;
 $$;
 
+revoke all on function public.operations_upsert_branch(uuid, uuid, text, text, text, text, text, text) from public, anon;
+grant execute on function public.operations_upsert_branch(uuid, uuid, text, text, text, text, text, text) to authenticated, service_role;
+
 -- 4. Transactional team member creation & edit RPC
 create or replace function public.operations_save_team_member(
   _business_id uuid,
@@ -253,7 +267,20 @@ begin
     end loop;
   end if;
 
-  -- Synchronize assignments atomically
+  -- Synchronize assignments atomically:
+  -- Revoke active cashier sessions for any branch assignments being removed
+  update public.cashier_sessions
+  set revoked_at = coalesce(revoked_at, now()),
+      revoked_by = auth.uid()
+  where business_id = _business_id
+    and staff_id = _id
+    and branch_id in (
+      select branch_id from public.staff_branch_assignments
+      where business_id = _business_id and staff_id = _id
+        and (_branch_ids is null or branch_id <> all(_branch_ids))
+    )
+    and revoked_at is null;
+
   delete from public.staff_branch_assignments
   where business_id = _business_id
     and staff_id = _id

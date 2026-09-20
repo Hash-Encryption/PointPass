@@ -70,44 +70,6 @@ export type CashierSession = {
   revoked_at: string | null;
 };
 
-function generateInternalBranchCode(nameEn: string, existingCodes: string[]): string {
-  const base = nameEn
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 24);
-  const prefix = base.length >= 2 ? base : "loc";
-  let candidate = prefix;
-  let idx = 1;
-  const lowerSet = new Set(existingCodes.map((c) => c.toLowerCase()));
-  while (lowerSet.has(candidate)) {
-    idx += 1;
-    candidate = `${prefix}-${idx}`;
-    if (idx > 50) {
-      candidate = `${prefix}-${Math.random().toString(36).slice(2, 6)}`;
-      break;
-    }
-  }
-  return candidate;
-}
-
-function generateInternalStaffCode(role: string, existingCodes: string[]): string {
-  const prefix = role.toLowerCase() === "manager" ? "mgr" : "csh";
-  let candidate = `${prefix}-1`;
-  let idx = 1;
-  const lowerSet = new Set(existingCodes.map((c) => c.toLowerCase()));
-  while (lowerSet.has(candidate)) {
-    idx += 1;
-    candidate = `${prefix}-${idx}`;
-    if (idx > 50) {
-      candidate = `${prefix}-${Math.random().toString(36).slice(2, 6)}`;
-      break;
-    }
-  }
-  return candidate;
-}
-
 export function OperationsPanel({ businessId, ar }: { businessId: string; ar: boolean }) {
   const [activeTab, setActiveTab] = useState<"locations" | "team" | "devices">("locations");
   const [selectedBranchId, setSelectedBranchId] = useState<string | null>(null);
@@ -336,14 +298,10 @@ export function OperationsPanel({ businessId, ar }: { businessId: string; ar: bo
     }
 
     setSaving(true);
-    const existingCodes = rawData.branches.map((b) => b.code);
-    const code =
-      editingBranch?.code || generateInternalBranchCode(branchForm.nameEn, existingCodes);
-
     const { error } = await supabase.rpc("operations_upsert_branch", {
       _business_id: businessId,
       _branch_id: editingBranch?.id || null,
-      _code: code,
+      _code: editingBranch?.code || null,
       _name_ar: branchForm.nameAr.trim(),
       _name_en: branchForm.nameEn.trim(),
       _address_ar: branchForm.addressAr.trim() || null,
@@ -416,14 +374,10 @@ export function OperationsPanel({ businessId, ar }: { businessId: string; ar: bo
     }
 
     setSaving(true);
-    const existingCodes = rawData.staff.map((s) => s.code);
-    const code = editingStaff?.code || generateInternalStaffCode(staffForm.role, existingCodes);
-
-    // Try transactional RPC first
-    const { data: memberId, error: rpcError } = await supabase.rpc("operations_save_team_member", {
+    const { error } = await supabase.rpc("operations_save_team_member", {
       _business_id: businessId,
       _staff_id: editingStaff?.id || null,
-      _code: code,
+      _code: editingStaff?.code || null,
       _name_ar: staffForm.nameAr.trim(),
       _name_en: staffForm.nameEn.trim(),
       _email: staffForm.email.trim() || null,
@@ -433,55 +387,11 @@ export function OperationsPanel({ businessId, ar }: { businessId: string; ar: bo
       _branch_ids: staffForm.branchIds,
     });
 
-    if (rpcError) {
-      // Fallback sequential execution with compensation
-      const { data: staffId, error: staffError } = await supabase.rpc("operations_upsert_staff", {
-        _business_id: businessId,
-        _staff_id: editingStaff?.id || null,
-        _code: code,
-        _name_ar: staffForm.nameAr.trim(),
-        _name_en: staffForm.nameEn.trim(),
-        _email: staffForm.email.trim() || null,
-        _role: staffForm.role,
-        _status: staffForm.status,
-        _pin: staffForm.pin || null,
-      });
-
-      if (staffError) {
-        setSaving(false);
-        toast.error(staffError.message);
-        return;
-      }
-
-      // Sync branch assignments sequentially
-      const targetId = staffId as string;
-      const currentAssigned = new Set(
-        rawData.assignments.filter((a) => a.staff_id === targetId).map((a) => a.branch_id),
-      );
-      const toAdd = staffForm.branchIds.filter((id) => !currentAssigned.has(id));
-      const toRemove = Array.from(currentAssigned).filter(
-        (id) => !staffForm.branchIds.includes(id),
-      );
-
-      for (const bId of toAdd) {
-        await supabase.rpc("operations_assign_staff", {
-          _business_id: businessId,
-          _staff_id: targetId,
-          _branch_id: bId,
-          _assigned: true,
-        });
-      }
-      for (const bId of toRemove) {
-        await supabase.rpc("operations_assign_staff", {
-          _business_id: businessId,
-          _staff_id: targetId,
-          _branch_id: bId,
-          _assigned: false,
-        });
-      }
-    }
-
     setSaving(false);
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
     toast.success(
       editingStaff
         ? ar
