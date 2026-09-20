@@ -572,10 +572,10 @@ begin
   );
 
   -- Branches for Business A
-  insert into public.branches (id, business_id, code, name_ar, name_en, is_main, status)
+  insert into public.branches (id, business_id, code, name_ar, name_en, status)
   values
-    (_branch_a1_id, _biz_a_id, 'bra1', 'فرع العليا', 'Olaya Branch', true, 'active'),
-    (_branch_a2_id, _biz_a_id, 'bra2', 'فرع النخيل', 'Nakheel Branch', false, 'active');
+    (_branch_a1_id, _biz_a_id, 'bra1', 'فرع العليا', 'Olaya Branch', 'active'),
+    (_branch_a2_id, _biz_a_id, 'bra2', 'فرع النخيل', 'Nakheel Branch', 'active');
 
   -- Staff members
   insert into public.staff_members (id, business_id, auth_user_id, code, name_ar, name_en, role, status)
@@ -598,8 +598,8 @@ begin
     _biz_b_id, 'test-biz-b', 'مقهى ب', 'Cafe B', _owner_b_id, 'active', 'points'
   );
 
-  insert into public.branches (id, business_id, code, name_ar, name_en, is_main, status)
-  values (_branch_b1_id, _biz_b_id, 'brb1', 'فرع ب الرئيسي', 'Branch B Main', true, 'active');
+  insert into public.branches (id, business_id, code, name_ar, name_en, status)
+  values (_branch_b1_id, _biz_b_id, 'brb1', 'فرع ب الرئيسي', 'Branch B Main', 'active');
 
   -- Customer 1: Has activity in Branch A1 only
   insert into public.pass_instances (

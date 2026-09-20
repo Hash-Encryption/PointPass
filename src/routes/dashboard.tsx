@@ -255,6 +255,7 @@ function MerchantDashboard() {
   const operationalRole = accessQuery.data?.operational_role;
   const isOwnerUser = isOwner(operationalRole);
   const isManagerUser = isManager(operationalRole);
+  const isCashierUser = isCashier(operationalRole);
   const managedBranchIds = useMemo(
     () => accessQuery.data?.managed_branch_ids ?? [],
     [accessQuery.data?.managed_branch_ids],
@@ -266,10 +267,10 @@ function MerchantDashboard() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("branches")
-        .select("id,name_ar,name_en,is_main,status")
+        .select("id,name_ar,name_en,status")
         .eq("business_id", business!.id)
         .eq("status", "active")
-        .order("is_main", { ascending: false });
+        .order("created_at", { ascending: true });
       if (error) throw error;
       return data ?? [];
     },
