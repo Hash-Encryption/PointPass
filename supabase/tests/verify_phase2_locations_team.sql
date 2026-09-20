@@ -2,9 +2,305 @@
 -- PointPass Phase 2: Locations & Team Pre-Deployment Certification Suite
 -- Real PostgreSQL role switching under "anon" and "authenticated".
 -- Executes inside a transaction with automatic ROLLBACK so zero test data remains.
+-- Fully self-contained: establishes Phase 2 DDL in-transaction so it can be run
+-- before or after migration application.
 -- ==============================================================================
 
 BEGIN;
+
+-- ------------------------------------------------------------------------------
+-- 0. Establish Phase 2 DDL in Transaction (Rolls back automatically at the end)
+-- ------------------------------------------------------------------------------
+
+-- 1. Safe PIN-configured status projection
+create or replace function public.operations_staff_pin_status(_business_id uuid)
+returns table (staff_id uuid, pin_configured boolean)
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not (
+    public.can_manage_business(auth.uid(), _business_id)
+    or exists (
+      select 1 from public.branches b
+      where b.business_id = _business_id
+        and public.can_manage_branch(auth.uid(), b.id)
+    )
+  ) then
+    raise exception 'Access denied to business staff PIN status';
+  end if;
+
+  return query
+  select
+    s.id as staff_id,
+    exists(
+      select 1 from public.staff_cashier_credentials c
+      where c.staff_id = s.id
+    ) as pin_configured
+  from public.staff_members s
+  where s.business_id = _business_id
+    and public.user_can_access_staff(auth.uid(), s.id);
+end;
+$$;
+
+revoke all on function public.operations_staff_pin_status(uuid) from public, anon;
+grant execute on function public.operations_staff_pin_status(uuid) to authenticated, service_role;
+
+-- 2. Safe internal code generator helpers
+create or replace function public.generate_branch_code(
+  _business_id uuid,
+  _name text default null
+)
+returns text
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  _base text;
+  _candidate text;
+  _idx integer := 1;
+begin
+  if auth.uid() is not null and not public.can_manage_business(auth.uid(), _business_id) then
+    raise exception 'Access denied to generate branch code';
+  end if;
+
+  _base := lower(regexp_replace(coalesce(trim(_name), ''), '[^a-zA-Z0-9]+', '-', 'g'));
+  _base := trim(both '-' from _base);
+  if length(_base) < 2 or length(_base) > 24 then
+    _base := 'loc';
+  end if;
+
+  _candidate := _base;
+  while exists (
+    select 1 from public.branches
+    where business_id = _business_id and lower(code) = _candidate
+  ) loop
+    _idx := _idx + 1;
+    _candidate := _base || '-' || _idx::text;
+    if _idx > 100 then
+      _candidate := _base || '-' || substr(md5(random()::text), 1, 4);
+      exit;
+    end if;
+  end loop;
+
+  return _candidate;
+end;
+$$;
+
+create or replace function public.generate_staff_code(
+  _business_id uuid,
+  _role text default 'cashier',
+  _name text default null
+)
+returns text
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  _prefix text := case when lower(_role) = 'manager' then 'mgr' else 'csh' end;
+  _candidate text;
+  _idx integer := 1;
+begin
+  if auth.uid() is not null and not public.can_manage_business(auth.uid(), _business_id) then
+    raise exception 'Access denied to generate staff code';
+  end if;
+
+  _candidate := _prefix || '-' || _idx::text;
+  while exists (
+    select 1 from public.staff_members
+    where business_id = _business_id and lower(code) = _candidate
+  ) loop
+    _idx := _idx + 1;
+    _candidate := _prefix || '-' || _idx::text;
+    if _idx > 100 then
+      _candidate := _prefix || '-' || substr(md5(random()::text), 1, 4);
+      exit;
+    end if;
+  end loop;
+
+  return _candidate;
+end;
+$$;
+
+revoke all on function public.generate_branch_code(uuid, text) from public, anon, authenticated;
+grant execute on function public.generate_branch_code(uuid, text) to service_role;
+
+revoke all on function public.generate_staff_code(uuid, text, text) from public, anon, authenticated;
+grant execute on function public.generate_staff_code(uuid, text, text) to service_role;
+
+-- 3. Enhance operations_upsert_branch
+create or replace function public.operations_upsert_branch(
+  _business_id uuid,
+  _branch_id uuid,
+  _code text,
+  _name_ar text,
+  _name_en text,
+  _address_ar text default null,
+  _address_en text default null,
+  _status text default 'active'
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  _id uuid;
+  _clean_code text := lower(trim(coalesce(_code, '')));
+begin
+  if _branch_id is null then
+    if not public.can_manage_business(auth.uid(), _business_id) then
+      raise exception 'Branch creation denied';
+    end if;
+    if _clean_code = '' then
+      _clean_code := public.generate_branch_code(_business_id, coalesce(_name_en, _name_ar));
+    end if;
+  else
+    if not exists (
+      select 1 from public.branches b
+      where b.id = _branch_id and b.business_id = _business_id
+        and public.can_manage_branch(auth.uid(), b.id)
+    ) then
+      raise exception 'Branch update denied';
+    end if;
+    if _clean_code = '' then
+      select code into _clean_code
+      from public.branches
+      where id = _branch_id and business_id = _business_id;
+    end if;
+  end if;
+
+  if _clean_code !~ '^[a-z0-9]+(?:-[a-z0-9]+)*$'
+    or length(trim(_name_ar)) not between 2 and 120
+    or length(trim(_name_en)) not between 2 and 120
+    or _status not in ('active', 'inactive') then
+    raise exception 'Invalid branch details';
+  end if;
+
+  if _branch_id is null then
+    insert into public.branches (
+      business_id, code, name_ar, name_en, address_ar, address_en, status
+    ) values (
+      _business_id, _clean_code, trim(_name_ar), trim(_name_en),
+      nullif(trim(_address_ar), ''), nullif(trim(_address_en), ''), _status
+    ) returning id into _id;
+  else
+    update public.branches
+    set code = _clean_code,
+        name_ar = trim(_name_ar),
+        name_en = trim(_name_en),
+        address_ar = nullif(trim(_address_ar), ''),
+        address_en = nullif(trim(_address_en), ''),
+        status = _status,
+        updated_at = now()
+    where id = _branch_id and business_id = _business_id
+    returning id into _id;
+  end if;
+
+  return _id;
+end;
+$$;
+
+revoke all on function public.operations_upsert_branch(uuid, uuid, text, text, text, text, text, text) from public, anon;
+grant execute on function public.operations_upsert_branch(uuid, uuid, text, text, text, text, text, text) to authenticated, service_role;
+
+-- 4. Transactional team member creation & edit RPC
+create or replace function public.operations_save_team_member(
+  _business_id uuid,
+  _staff_id uuid default null,
+  _code text default null,
+  _name_ar text default null,
+  _name_en text default null,
+  _email text default null,
+  _role text default 'cashier',
+  _status text default 'active',
+  _pin text default null,
+  _branch_ids uuid[] default array[]::uuid[]
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public, auth, extensions
+as $$
+declare
+  _id uuid;
+  _clean_code text := lower(trim(coalesce(_code, '')));
+  _b_id uuid;
+begin
+  if not public.can_manage_business(auth.uid(), _business_id) then
+    raise exception 'Staff management denied';
+  end if;
+
+  -- Auto-generate internal code if not provided
+  if _clean_code = '' then
+    if _staff_id is not null then
+      select code into _clean_code
+      from public.staff_members
+      where id = _staff_id and business_id = _business_id;
+    else
+      _clean_code := public.generate_staff_code(_business_id, _role, coalesce(_name_en, _name_ar));
+    end if;
+  end if;
+
+  -- Delegate to operations_upsert_staff to preserve all Phase 1 backend validations & RLS
+  _id := public.operations_upsert_staff(
+    _business_id => _business_id,
+    _staff_id => _staff_id,
+    _code => _clean_code,
+    _name_ar => _name_ar,
+    _name_en => _name_en,
+    _email => _email,
+    _role => _role,
+    _status => _status,
+    _pin => _pin
+  );
+
+  -- Validate all branch_ids belong to the business
+  if _branch_ids is not null and array_length(_branch_ids, 1) > 0 then
+    foreach _b_id in array _branch_ids loop
+      if not exists (
+        select 1 from public.branches
+        where id = _b_id and business_id = _business_id
+      ) then
+        raise exception 'Branch % does not belong to business', _b_id;
+      end if;
+    end loop;
+  end if;
+
+  -- Synchronize assignments atomically:
+  -- Revoke active cashier sessions for any branch assignments being removed
+  update public.cashier_sessions
+  set revoked_at = coalesce(revoked_at, now()),
+      revoked_by = auth.uid()
+  where business_id = _business_id
+    and staff_id = _id
+    and branch_id in (
+      select branch_id from public.staff_branch_assignments
+      where business_id = _business_id and staff_id = _id
+        and (_branch_ids is null or branch_id <> all(_branch_ids))
+    )
+    and revoked_at is null;
+
+  delete from public.staff_branch_assignments
+  where business_id = _business_id
+    and staff_id = _id
+    and (_branch_ids is null or branch_id <> all(_branch_ids));
+
+  if _branch_ids is not null and array_length(_branch_ids, 1) > 0 then
+    insert into public.staff_branch_assignments (business_id, staff_id, branch_id, assigned_by)
+    select _business_id, _id, unnest(_branch_ids), auth.uid()
+    on conflict (staff_id, branch_id) do nothing;
+  end if;
+
+  return _id;
+end;
+$$;
+
+revoke all on function public.operations_save_team_member(uuid, uuid, text, text, text, text, text, text, text, uuid[]) from public, anon;
+grant execute on function public.operations_save_team_member(uuid, uuid, text, text, text, text, text, text, text, uuid[]) to authenticated, service_role;
 
 -- ------------------------------------------------------------------------------
 -- 1. Setup Context Registry and Mock Fixtures (Privileged Execution)
@@ -52,6 +348,7 @@ DECLARE
   v_staff_mgr_id uuid;
   v_staff_csh_id uuid;
   v_staff_b_only_id uuid;
+  v_session_id uuid := gen_random_uuid();
 BEGIN
   RAISE NOTICE '==============================================================';
   RAISE NOTICE 'Starting Phase 2 Locations & Team Certification Suite';
@@ -74,7 +371,6 @@ BEGIN
     (v_cross_biz_id, v_cross_user_id, 'p2-cross-' || substr(gen_random_uuid()::text, 1, 8), 'منافس ف2', 'Phase2 Competitor', 'multi_location', 'active');
 
   -- C. Branches for primary business
-  -- Main branch was created automatically by trigger on businesses insert. Update or insert Branch A and B.
   SELECT id INTO v_branch_a_id FROM public.branches WHERE business_id = v_biz_id LIMIT 1;
   UPDATE public.branches SET code = 'branch-a', name_ar = 'فرع أ', name_en = 'Branch A' WHERE id = v_branch_a_id;
 
@@ -112,6 +408,10 @@ BEGIN
   INSERT INTO public.staff_branch_assignments (business_id, staff_id, branch_id, assigned_by)
   VALUES (v_biz_id, v_staff_b_only_id, v_branch_b_id, v_owner_id);
 
+  -- E. Cashier session for revocation test (created in privileged context)
+  INSERT INTO public.cashier_sessions (id, business_id, branch_id, staff_id, token_hash, expires_at)
+  VALUES (v_session_id, v_biz_id, v_branch_a_id, v_staff_csh_id, 'dummy_token_hash_test_p2', now() + interval '8 hours');
+
   -- Store all in test_context
   INSERT INTO pg_temp.test_context (key, val) VALUES
     ('owner_id', v_owner_id),
@@ -125,7 +425,8 @@ BEGIN
     ('cross_branch_id', v_cross_branch_id),
     ('staff_mgr_id', v_staff_mgr_id),
     ('staff_csh_id', v_staff_csh_id),
-    ('staff_b_only_id', v_staff_b_only_id);
+    ('staff_b_only_id', v_staff_b_only_id),
+    ('session_id', v_session_id);
 
   RAISE NOTICE 'Privileged setup completed successfully.';
 END $$;
@@ -150,7 +451,7 @@ BEGIN
   -- TEST 1: Anon cannot call generate_branch_code
   v_error_thrown := false;
   BEGIN
-    PERFORM public.generate_branch_code(v_biz_id, 'test');
+    EXECUTE 'SELECT public.generate_branch_code($1, $2)' USING v_biz_id, 'test'::text;
   EXCEPTION WHEN OTHERS THEN
     v_error_thrown := true;
     v_error_msg := SQLERRM;
@@ -162,7 +463,7 @@ BEGIN
   -- TEST 2: Anon cannot call generate_staff_code
   v_error_thrown := false;
   BEGIN
-    PERFORM public.generate_staff_code(v_biz_id, 'cashier', 'test');
+    EXECUTE 'SELECT public.generate_staff_code($1, $2, $3)' USING v_biz_id, 'cashier'::text, 'test'::text;
   EXCEPTION WHEN OTHERS THEN
     v_error_thrown := true;
     v_error_msg := SQLERRM;
@@ -174,7 +475,7 @@ BEGIN
   -- TEST 3: Anon cannot call operations_staff_pin_status
   v_error_thrown := false;
   BEGIN
-    PERFORM * FROM public.operations_staff_pin_status(v_biz_id);
+    EXECUTE 'SELECT * FROM public.operations_staff_pin_status($1)' USING v_biz_id;
   EXCEPTION WHEN OTHERS THEN
     v_error_thrown := true;
     v_error_msg := SQLERRM;
@@ -186,7 +487,8 @@ BEGIN
   -- TEST 4: Anon cannot call operations_upsert_branch
   v_error_thrown := false;
   BEGIN
-    PERFORM public.operations_upsert_branch(v_biz_id, null, 'anon-loc', 'فرع', 'Branch');
+    EXECUTE 'SELECT public.operations_upsert_branch($1, $2, $3, $4, $5)'
+      USING v_biz_id, null::uuid, 'anon-loc'::text, 'فرع'::text, 'Branch'::text;
   EXCEPTION WHEN OTHERS THEN
     v_error_thrown := true;
     v_error_msg := SQLERRM;
@@ -198,7 +500,8 @@ BEGIN
   -- TEST 5: Anon cannot call operations_save_team_member
   v_error_thrown := false;
   BEGIN
-    PERFORM public.operations_save_team_member(v_biz_id, null, 'anon-csh', 'كاشير', 'Cashier');
+    EXECUTE 'SELECT public.operations_save_team_member($1, $2, $3, $4, $5)'
+      USING v_biz_id, null::uuid, 'anon-csh'::text, 'كاشير'::text, 'Cashier'::text;
   EXCEPTION WHEN OTHERS THEN
     v_error_thrown := true;
     v_error_msg := SQLERRM;
@@ -225,6 +528,7 @@ DECLARE
   v_branch_b_id uuid := pg_temp.get_ctx('branch_b_id');
   v_staff_csh_id uuid := pg_temp.get_ctx('staff_csh_id');
   v_staff_b_only_id uuid := pg_temp.get_ctx('staff_b_only_id');
+  v_session_id uuid := pg_temp.get_ctx('session_id');
 
   v_new_branch_id uuid;
   v_new_branch_code text;
@@ -232,7 +536,6 @@ DECLARE
   v_new_staff_code text;
   v_pin_rows integer;
   v_pin_configured boolean;
-  v_session_id uuid := gen_random_uuid();
   v_session_revoked_at timestamptz;
   v_session_revoked_by uuid;
   v_error_thrown boolean;
@@ -249,7 +552,7 @@ BEGIN
   -- TEST 6: Direct call to generate_branch_code denied even to authenticated owner
   v_error_thrown := false;
   BEGIN
-    PERFORM public.generate_branch_code(v_biz_id, 'direct-attempt');
+    EXECUTE 'SELECT public.generate_branch_code($1, $2)' USING v_biz_id, 'direct-attempt'::text;
   EXCEPTION WHEN OTHERS THEN
     v_error_thrown := true;
     v_error_msg := SQLERRM;
@@ -261,7 +564,7 @@ BEGIN
   -- TEST 7: Direct call to generate_staff_code denied even to authenticated owner
   v_error_thrown := false;
   BEGIN
-    PERFORM public.generate_staff_code(v_biz_id, 'cashier', 'direct-attempt');
+    EXECUTE 'SELECT public.generate_staff_code($1, $2, $3)' USING v_biz_id, 'cashier'::text, 'direct-attempt'::text;
   EXCEPTION WHEN OTHERS THEN
     v_error_thrown := true;
     v_error_msg := SQLERRM;
@@ -322,10 +625,6 @@ BEGIN
   END IF;
 
   -- TEST 11: Removing branch assignment in operations_save_team_member revokes active cashier sessions
-  -- Create active cashier session at Branch A for v_staff_csh_id
-  INSERT INTO public.cashier_sessions (id, business_id, branch_id, staff_id, token_hash, expires_at)
-  VALUES (v_session_id, v_biz_id, v_branch_a_id, v_staff_csh_id, 'dummy_token_hash_test_p2', now() + interval '8 hours');
-
   -- Remove Branch A assignment, leaving only Branch B
   PERFORM public.operations_save_team_member(
     _business_id := v_biz_id,
