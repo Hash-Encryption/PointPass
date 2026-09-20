@@ -218,6 +218,7 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+#variable_conflict use_column
 declare
   _caller_id uuid := auth.uid();
   _clean_slug text := lower(trim(_slug));
@@ -238,8 +239,10 @@ begin
   -- Normalize requested plan
   if _clean_plan in ('multi_location', 'growth', 'enterprise') then
     _canonical_plan := 'multi_location';
-  else
+  elsif _clean_plan in ('single_location', 'starter') then
     _canonical_plan := 'single_location';
+  else
+    raise exception 'Invalid plan code: %', _clean_plan;
   end if;
 
   -- Check if user already has an incomplete onboarding business created very recently
@@ -378,6 +381,7 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+#variable_conflict use_column
 declare
   _clean_step text := lower(trim(_step));
   _clean_plan text := lower(trim(coalesce(_requested_plan, '')));
@@ -395,18 +399,20 @@ begin
   if _clean_plan <> '' then
     if _clean_plan in ('multi_location', 'growth', 'enterprise') then
       _clean_plan := 'multi_location';
-    else
+    elsif _clean_plan in ('single_location', 'starter') then
       _clean_plan := 'single_location';
-    end if;
-
-    if not exists (select 1 from public.plans where code = _clean_plan and is_active = true) then
+    else
       raise exception 'Selected plan is not available';
     end if;
 
-    update public.business_subscriptions
+    if not exists (select 1 from public.plans p where p.code = _clean_plan and p.is_active = true) then
+      raise exception 'Selected plan is not available';
+    end if;
+
+    update public.business_subscriptions s
     set requested_plan_code = _clean_plan,
         updated_at = now()
-    where business_id = _business_id;
+    where s.business_id = _business_id;
   end if;
 
   -- Step: Loyalty & Reward configuration
@@ -428,35 +434,35 @@ begin
       raise exception 'Invalid accent color hex code';
     end if;
 
-    update public.businesses
+    update public.businesses b
     set program_type = _program_type,
-        brand_color = coalesce(_brand_color, brand_color),
-        accent_color = coalesce(_accent_color, accent_color),
-        offer_ar = coalesce(_offer_ar, offer_ar),
-        offer_en = coalesce(_offer_en, offer_en),
-        target_stamps = coalesce(_target_stamps, target_stamps),
-        sar_per_point = coalesce(_sar_per_point, sar_per_point),
-        points_per_reward = coalesce(_points_per_reward, points_per_reward)
-    where id = _business_id;
+        brand_color = coalesce(_brand_color, b.brand_color),
+        accent_color = coalesce(_accent_color, b.accent_color),
+        offer_ar = coalesce(_offer_ar, b.offer_ar),
+        offer_en = coalesce(_offer_en, b.offer_en),
+        target_stamps = coalesce(_target_stamps, b.target_stamps),
+        sar_per_point = coalesce(_sar_per_point, b.sar_per_point),
+        points_per_reward = coalesce(_points_per_reward, b.points_per_reward)
+    where b.id = _business_id;
   end if;
 
   -- Step: Main Location confirmation/update
   if _main_branch_name_ar is not null or _main_branch_name_en is not null or _main_branch_address_ar is not null or _main_branch_address_en is not null then
-    update public.branches
-    set name_ar = coalesce(nullif(trim(_main_branch_name_ar), ''), name_ar),
-        name_en = coalesce(nullif(trim(_main_branch_name_en), ''), name_en),
-        address_ar = coalesce(nullif(trim(_main_branch_address_ar), ''), address_ar),
-        address_en = coalesce(nullif(trim(_main_branch_address_en), ''), address_en),
+    update public.branches br
+    set name_ar = coalesce(nullif(trim(_main_branch_name_ar), ''), br.name_ar),
+        name_en = coalesce(nullif(trim(_main_branch_name_en), ''), br.name_en),
+        address_ar = coalesce(nullif(trim(_main_branch_address_ar), ''), br.address_ar),
+        address_en = coalesce(nullif(trim(_main_branch_address_en), ''), br.address_en),
         updated_at = now()
-    where business_id = _business_id
-      and lower(code) = 'main';
+    where br.business_id = _business_id
+      and lower(br.code) = 'main';
   end if;
 
   -- Advance onboarding step
-  update public.business_onboarding
+  update public.business_onboarding bo
   set step = _clean_step,
       updated_at = now()
-  where business_id = _business_id;
+  where bo.business_id = _business_id;
 
   return query
   select o.step, o.completed
@@ -477,17 +483,18 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+#variable_conflict use_column
 begin
   if not public.can_manage_business(auth.uid(), _business_id) then
     raise exception 'Onboarding completion denied';
   end if;
 
-  update public.business_onboarding
+  update public.business_onboarding bo
   set step = 'completed',
       completed = true,
       completed_at = now(),
       updated_at = now()
-  where business_id = _business_id;
+  where bo.business_id = _business_id;
 
   return true;
 end;
@@ -513,6 +520,7 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+#variable_conflict use_column
 declare
   _target_max integer;
   _active_locations integer;
@@ -525,8 +533,10 @@ begin
 
   if _clean_plan in ('multi_location', 'growth', 'enterprise') then
     _clean_plan := 'multi_location';
-  else
+  elsif _clean_plan in ('single_location', 'starter') then
     _clean_plan := 'single_location';
+  else
+    raise exception 'Target plan does not exist or is inactive';
   end if;
 
   select p.max_locations into _target_max
@@ -589,6 +599,7 @@ stable
 security definer
 set search_path = public
 as $$
+#variable_conflict use_column
 declare
   _active_locs integer;
   _max_locs integer;
@@ -602,8 +613,8 @@ begin
   from public.branches b
   where b.business_id = _business_id and b.status = 'active';
 
-  select max_locations into _max_locs
-  from public.business_location_entitlement(_business_id);
+  select ble.max_locations into _max_locs
+  from public.business_location_entitlement(_business_id) ble;
 
   _max_locs := coalesce(_max_locs, 1);
 
