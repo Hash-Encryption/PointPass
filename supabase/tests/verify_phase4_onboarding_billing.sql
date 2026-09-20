@@ -1071,6 +1071,8 @@ $$;
 -- ==============================================================================
 -- Scenario 22: Status / cancellation does not delete loyalty or operational data
 -- ==============================================================================
+RESET ROLE;
+
 DO $$
 DECLARE
   v_existing_biz_id uuid := pg_temp.get_ctx('existing_biz');
@@ -1092,6 +1094,8 @@ BEGIN
   RAISE NOTICE '✓ Scenario 22 passed: Subscription cancellation preserves operational branches and staff';
 END;
 $$;
+
+SET ROLE authenticated;
 
 -- ==============================================================================
 -- Scenario 23: Downgrade below active Location usage is safely rejected
@@ -1135,13 +1139,14 @@ $$;
 -- ==============================================================================
 -- Scenario 27: Pre-registered merchant flow remains compatible
 -- ==============================================================================
+RESET ROLE;
+
 DO $$
 DECLARE
   v_prereg_biz_id uuid := pg_temp.get_ctx('pre_reg_biz');
   v_prereg_user_id uuid := pg_temp.get_ctx('pre_reg_user');
-  v_linked_biz record;
 BEGIN
-  -- Simulate link trigger logic
+  -- Simulate link trigger logic as service_role/superuser
   UPDATE public.businesses
   SET owner_id = v_prereg_user_id
   WHERE id = v_prereg_biz_id AND owner_id IS NULL;
@@ -1149,7 +1154,16 @@ BEGIN
   INSERT INTO public.user_roles (user_id, role, business_id)
   VALUES (v_prereg_user_id, 'merchant', v_prereg_biz_id)
   ON CONFLICT DO NOTHING;
+END;
+$$;
 
+SET ROLE authenticated;
+
+DO $$
+DECLARE
+  v_prereg_biz_id uuid := pg_temp.get_ctx('pre_reg_biz');
+  v_prereg_user_id uuid := pg_temp.get_ctx('pre_reg_user');
+BEGIN
   PERFORM pg_temp.set_test_auth(v_prereg_user_id);
 
   IF NOT public.can_manage_business(v_prereg_user_id, v_prereg_biz_id) THEN
@@ -1181,6 +1195,8 @@ $$;
 -- ==============================================================================
 -- Scenario 29: Provider / Webhook Status reporting
 -- ==============================================================================
+RESET ROLE;
+
 DO $$
 BEGIN
   -- Explicitly assert that no provider is configured for tested businesses
