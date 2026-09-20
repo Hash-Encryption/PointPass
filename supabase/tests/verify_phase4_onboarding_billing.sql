@@ -126,11 +126,11 @@ BEGIN
 
   INSERT INTO pg_temp.test_context (key, val) VALUES ('other_biz', v_other_biz_id);
 
-  -- Staff members for existing business
+  -- Staff members for existing business (code must be lowercase alphanumeric with hyphens)
   INSERT INTO public.staff_members (business_id, auth_user_id, code, name_ar, name_en, role, status)
   VALUES
-    (v_existing_biz_id, v_manager_user_id, 'MGR01', 'مدير المقهى', 'Cafe Manager', 'manager', 'active'),
-    (v_existing_biz_id, v_cashier_user_id, 'CSH01', 'كاشير المقهى', 'Cafe Cashier', 'cashier', 'active');
+    (v_existing_biz_id, v_manager_user_id, 'mgr-01', 'مدير المقهى', 'Cafe Manager', 'manager', 'active'),
+    (v_existing_biz_id, v_cashier_user_id, 'csh-01', 'كاشير المقهى', 'Cafe Cashier', 'cashier', 'active');
 
   -- Pre-registered business created by admin
   INSERT INTO public.businesses (
