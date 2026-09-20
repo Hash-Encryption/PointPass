@@ -277,7 +277,7 @@ begin
   end if;
 
   -- Enforce slug uniqueness without overwriting
-  if exists (select 1 from public.businesses where slug = _clean_slug) then
+  if exists (select 1 from public.businesses b where b.slug = _clean_slug) then
     raise exception 'Business slug already taken';
   end if;
 
@@ -342,7 +342,7 @@ begin
     _clean_slug,
     _clean_name_ar,
     _clean_name_en,
-    'starter'::text,
+    'single_location'::text,
     'plan'::text;
 end;
 $$;
@@ -529,9 +529,9 @@ begin
     _clean_plan := 'single_location';
   end if;
 
-  select max_locations into _target_max
-  from public.plans
-  where code = _clean_plan and is_active = true;
+  select p.max_locations into _target_max
+  from public.plans p
+  where p.code = _clean_plan and p.is_active = true;
 
   if _target_max is null then
     raise exception 'Target plan does not exist or is inactive';
@@ -539,22 +539,22 @@ begin
 
   -- Active locations count validation (downgrade protection)
   select count(*) into _active_locations
-  from public.branches
-  where business_id = _business_id and status = 'active';
+  from public.branches b
+  where b.business_id = _business_id and b.status = 'active';
 
   if _active_locations > _target_max then
     raise exception 'Cannot change plan: current active locations (%) exceed target plan limit (%)', _active_locations, _target_max;
   end if;
 
   -- Record requested plan on business_subscriptions
-  update public.business_subscriptions
+  update public.business_subscriptions s
   set requested_plan_code = _clean_plan,
       updated_at = now()
-  where business_id = _business_id;
+  where s.business_id = _business_id;
 
-  select plan_code into _current_plan
-  from public.business_subscriptions
-  where business_id = _business_id;
+  select s.plan_code into _current_plan
+  from public.business_subscriptions s
+  where s.business_id = _business_id;
 
   -- Return truthful response: online billing is not configured, effective plan unchanged
   return query select
@@ -599,8 +599,8 @@ begin
   end if;
 
   select count(*) into _active_locs
-  from public.branches
-  where business_id = _business_id and status = 'active';
+  from public.branches b
+  where b.business_id = _business_id and b.status = 'active';
 
   select max_locations into _max_locs
   from public.business_location_entitlement(_business_id);
