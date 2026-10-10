@@ -5,6 +5,7 @@ import { z } from "zod";
 import { env } from "cloudflare:workers";
 import { createServerSupabaseClient } from "@/lib/server-supabase";
 import { buildWalletPassPayload } from "@/lib/wallet-payload";
+import { generateStampStripDataUri, resolveStampIcon } from "@/lib/strip-generator";
 import { captureAppError } from "@/lib/observability";
 
 // Caller-scoped throttle for anonymous guest claims (prevents bot floods while protecting legitimate users)
@@ -38,6 +39,34 @@ function checkAnonClaimRateLimit(): boolean {
     return true;
   } catch {
     return true; // Fail open to protect legitimate customer traffic
+  }
+}
+
+function getPublicStripUrl(
+  slug: string,
+  stamps: number,
+  target: number,
+  brandColor?: string | null,
+  accentColor?: string | null,
+  stampIcon?: string | null,
+): string | undefined {
+  try {
+    const host = getRequestHeader("x-forwarded-host") ?? getRequestHeader("host");
+    const proto = getRequestHeader("x-forwarded-proto") ?? "https";
+    if (!host || host.includes("localhost") || host.includes("127.0.0.1")) {
+      return undefined;
+    }
+    const origin = `${proto}://${host}`;
+    const params = new URLSearchParams({
+      stamps: String(stamps),
+      target: String(target),
+    });
+    if (brandColor) params.set("brand", brandColor);
+    if (accentColor) params.set("accent", accentColor);
+    if (stampIcon) params.set("icon", stampIcon);
+    return `${origin}/api/strip/${encodeURIComponent(slug)}.png?${params.toString()}`;
+  } catch {
+    return undefined;
   }
 }
 
@@ -157,6 +186,52 @@ export const createWalletPass = createServerFn({ method: "POST" })
       };
     }
 
+    // Query business visual branding (colors, logo, template metadata)
+    const { data: biz } = await supabase
+      .from("businesses")
+      .select("brand_color,accent_color,logo_url,offer_ar,offer_en")
+      .eq("slug", data.slug)
+      .maybeSingle();
+
+    const targetStamps = claim.business_target_stamps || 8;
+    const currentStamps = claim.pass_stamps ?? 0;
+    const isStampCard =
+      claim.pass_program_type === "stamp" || claim.pass_program_type === "coupon_morph";
+
+    let stripDataUri: string | undefined;
+    let stripUrl: string | undefined;
+    if (isStampCard) {
+      try {
+        const icon = resolveStampIcon(
+          null,
+          biz?.offer_ar || biz?.offer_en || claim.business_offer,
+          biz?.brand_color,
+        );
+        stripUrl = getPublicStripUrl(
+          data.slug,
+          currentStamps,
+          targetStamps,
+          biz?.brand_color,
+          biz?.accent_color,
+          icon,
+        );
+        if (!stripUrl) {
+          stripDataUri = generateStampStripDataUri({
+            targetStamps,
+            stamps: currentStamps,
+            brandColor: biz?.brand_color,
+            accentColor: biz?.accent_color,
+            stampIcon: icon,
+          });
+        }
+      } catch (stripErr) {
+        captureAppError("CUSTOMER", stripErr, {
+          slug: data.slug,
+          operation: "strip_generation_create",
+        });
+      }
+    }
+
     // Build payload using actual loyalty state (never 0 if resumed)
     const result = await walletFetch(
       "POST",
@@ -166,10 +241,15 @@ export const createWalletPass = createServerFn({ method: "POST" })
         businessName: claim.business_name,
         offer: claim.business_offer,
         programType: claim.pass_program_type,
-        stamps: claim.pass_stamps ?? 0,
+        stamps: currentStamps,
         points: claim.pass_points ?? 0,
         morphed: claim.pass_morphed ?? false,
-        targetStamps: claim.business_target_stamps,
+        targetStamps,
+        brandColor: biz?.brand_color,
+        accentColor: biz?.accent_color,
+        stripUrl,
+        stripDataUri,
+        logoUrl: biz?.logo_url,
       }),
     );
     if (!result.ok) {
@@ -295,6 +375,51 @@ export const updateWalletPass = createServerFn({ method: "POST" })
       };
     }
 
+    // Query business visual branding to update the strip image with the new stamp count
+    const { data: biz } = await supabase
+      .from("businesses")
+      .select("brand_color,accent_color,logo_url,offer_ar,offer_en")
+      .eq("slug", data.slug)
+      .maybeSingle();
+
+    const targetStamps = state.business_target_stamps || 8;
+    const currentStamps = state.pass_stamps ?? 0;
+    const isStampCard =
+      state.pass_program_type === "stamp" || state.pass_program_type === "coupon_morph";
+    let stripDataUri: string | undefined;
+    let stripUrl: string | undefined;
+    if (isStampCard) {
+      try {
+        const icon = resolveStampIcon(
+          null,
+          biz?.offer_ar || biz?.offer_en || state.business_offer,
+          biz?.brand_color,
+        );
+        stripUrl = getPublicStripUrl(
+          data.slug,
+          currentStamps,
+          targetStamps,
+          biz?.brand_color,
+          biz?.accent_color,
+          icon,
+        );
+        if (!stripUrl) {
+          stripDataUri = generateStampStripDataUri({
+            targetStamps,
+            stamps: currentStamps,
+            brandColor: biz?.brand_color,
+            accentColor: biz?.accent_color,
+            stampIcon: icon,
+          });
+        }
+      } catch (stripErr) {
+        captureAppError("CUSTOMER", stripErr, {
+          slug: data.slug,
+          operation: "strip_generation_update",
+        });
+      }
+    }
+
     const result = await walletFetch(
       "PUT",
       `/passes/${encodeURIComponent(state.wallet_serial)}`,
@@ -303,10 +428,15 @@ export const updateWalletPass = createServerFn({ method: "POST" })
         businessName: state.business_name,
         offer: state.business_offer,
         programType: state.pass_program_type,
-        stamps: state.pass_stamps,
+        stamps: currentStamps,
         points: state.pass_points,
         morphed: state.pass_morphed,
-        targetStamps: state.business_target_stamps,
+        targetStamps,
+        brandColor: biz?.brand_color,
+        accentColor: biz?.accent_color,
+        stripUrl,
+        stripDataUri,
+        logoUrl: biz?.logo_url,
         ...(data.action === "redeem" ? { notification: "Reward redeemed" } : {}),
       }),
     );
@@ -348,7 +478,7 @@ export const sendWalletPush = createServerFn({ method: "POST" })
 
     const { data: business, error: businessError } = await supabase
       .from("businesses")
-      .select("id,name_en,offer_en,target_stamps")
+      .select("id,name_en,offer_en,target_stamps,brand_color,accent_color,logo_url,offer_ar")
       .eq("id", data.businessId)
       .eq("slug", data.slug)
       .maybeSingle();
@@ -376,9 +506,43 @@ export const sendWalletPush = createServerFn({ method: "POST" })
       return { ok: false as const, error: "No wallet passes match this segment" };
 
     const notification = [data.titleEn.trim(), data.bodyEn.trim()].filter(Boolean).join(" — ");
+    const targetStamps = business.target_stamps ?? 9;
+
     const results = await Promise.all(
-      passes.map((pass) =>
-        walletFetch(
+      passes.map((pass) => {
+        const isStampCard = pass.program_type === "stamp" || pass.program_type === "coupon_morph";
+        let stripDataUri: string | undefined;
+        let stripUrl: string | undefined;
+        if (isStampCard) {
+          try {
+            const icon = resolveStampIcon(
+              null,
+              business.offer_ar || business.offer_en,
+              business.brand_color,
+            );
+            stripUrl = getPublicStripUrl(
+              data.slug,
+              pass.stamps,
+              targetStamps,
+              business.brand_color,
+              business.accent_color,
+              icon,
+            );
+            if (!stripUrl) {
+              stripDataUri = generateStampStripDataUri({
+                targetStamps,
+                stamps: pass.stamps,
+                brandColor: business.brand_color,
+                accentColor: business.accent_color,
+                stampIcon: icon,
+              });
+            }
+          } catch {
+            // Graceful fallback to text payload
+          }
+        }
+
+        return walletFetch(
           "PUT",
           `/passes/${encodeURIComponent(pass.wallet_serial!)}`,
           buildWalletPassPayload({
@@ -389,11 +553,16 @@ export const sendWalletPush = createServerFn({ method: "POST" })
             stamps: pass.stamps,
             points: pass.points,
             morphed: pass.morphed,
-            targetStamps: business.target_stamps ?? 9,
+            targetStamps,
             notification,
+            brandColor: business.brand_color,
+            accentColor: business.accent_color,
+            stripUrl,
+            stripDataUri,
+            logoUrl: business.logo_url,
           }),
-        ),
-      ),
+        );
+      }),
     );
     const failed = results.filter((result) => !result.ok).length;
     return {

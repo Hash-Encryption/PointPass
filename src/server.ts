@@ -1,7 +1,8 @@
-import "./lib/error-capture";
+import "./lib/error-capture.ts";
 
-import { consumeLastCapturedError } from "./lib/error-capture";
-import { renderErrorPage } from "./lib/error-page";
+import { consumeLastCapturedError } from "./lib/error-capture.ts";
+import { renderErrorPage } from "./lib/error-page.ts";
+import { generateStampStripPng } from "./lib/strip-generator.ts";
 
 type ServerEntry = {
   fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> | Response;
@@ -47,6 +48,32 @@ function isH3SwallowedErrorBody(body: string): boolean {
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
     try {
+      const url = new URL(request.url);
+      if (url.pathname.startsWith("/api/strip/")) {
+        const params = url.searchParams;
+        const targetStamps = Number(params.get("target") || 8);
+        const stamps = Number(params.get("stamps") || 0);
+        const brandColor = params.get("brand") || undefined;
+        const accentColor = params.get("accent") || undefined;
+        const stampIcon = params.get("icon") || undefined;
+
+        const pngBuf = generateStampStripPng({
+          targetStamps,
+          stamps,
+          brandColor,
+          accentColor,
+          stampIcon,
+        });
+
+        return new Response(new Uint8Array(pngBuf), {
+          status: 200,
+          headers: {
+            "Content-Type": "image/png",
+            "Cache-Control": "public, max-age=60, s-maxage=300",
+          },
+        });
+      }
+
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);
       return await normalizeCatastrophicSsrResponse(response);
