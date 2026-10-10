@@ -5,24 +5,22 @@ import type { User } from "@supabase/supabase-js";
 import { Loader2 } from "lucide-react";
 import { useLocale } from "@/lib/i18n";
 import { supabase } from "@/lib/supabase";
-import { isOwner, isManager, isCashier, type OperationsAccess } from "@/lib/access";
+import { isManager, isCashier, type OperationsAccess } from "@/lib/access";
 import { AuthSignIn } from "@/components/AuthSignIn";
 import { OnboardingLayout, type OnboardingStepKey } from "@/components/onboarding/OnboardingLayout";
 import { BusinessSetupStep } from "@/components/onboarding/BusinessSetupStep";
-import { PlanSelectionStep } from "@/components/onboarding/PlanSelectionStep";
 import { LoyaltySetupStep } from "@/components/onboarding/LoyaltySetupStep";
 import { RewardSetupStep } from "@/components/onboarding/RewardSetupStep";
-import { MainLocationStep } from "@/components/onboarding/MainLocationStep";
 import { LaunchStep } from "@/components/onboarding/LaunchStep";
 import { type ProgramType } from "@/constants/defaultTemplates";
 
 export const Route = createFileRoute("/onboarding")({
   head: () => ({
     meta: [
-      { title: "إعداد المنشأة | Business Onboarding — Wallet Loyalty" },
+      { title: "إعداد المتجر وبطاقة الولاء | PointPass Onboarding" },
       {
         name: "description",
-        content: "Set up your digital loyalty program, brand pass, and main location.",
+        content: "Set up your digital loyalty program, brand pass, and counter QR in 2 minutes.",
       },
     ],
   }),
@@ -43,6 +41,7 @@ type OnboardingBusiness = {
   target_stamps: number | null;
   sar_per_point: number | null;
   points_per_reward: number;
+  stamp_icon?: string;
 };
 
 function OnboardingRoute() {
@@ -96,7 +95,6 @@ function OnboardingRoute() {
     queryKey: ["onboarding-business-check", user?.id],
     enabled: Boolean(user),
     queryFn: async () => {
-      // Look up businesses owned by or assigned to this user
       const { data: businesses, error } = await supabase
         .from("businesses")
         .select(
@@ -119,7 +117,7 @@ function OnboardingRoute() {
 
       return {
         business: biz,
-        onboarding: onb as { step: OnboardingStepKey; completed: boolean } | null,
+        onboarding: onb as { step: string; completed: boolean } | null,
       };
     },
   });
@@ -138,7 +136,6 @@ function OnboardingRoute() {
   });
 
   const operationalRole = accessQuery.data?.operational_role;
-  const isOwnerUser = isOwner(operationalRole);
   const isManagerUser = isManager(operationalRole);
   const isCashierUser = isCashier(operationalRole);
   const isSuperAdmin = adminRoleQuery.data?.role === "super_admin";
@@ -164,18 +161,27 @@ function OnboardingRoute() {
     if (!businessQuery.data) return;
     const { business, onboarding } = businessQuery.data;
 
-    // If onboarding is already marked completed, navigate straight to dashboard
+    // If onboarding is already completed, go straight to dashboard
     if (onboarding?.completed) {
       void navigate({ to: "/dashboard", replace: true });
       return;
     }
 
-    // Otherwise resume at the saved step
     setCreatedBusiness(business);
-    if (onboarding?.step && (onboarding.step as string) !== "completed") {
-      setCurrentStep(onboarding.step);
+
+    // Map existing draft step to condensed 4-step wizard
+    if (onboarding?.step) {
+      if (onboarding.step === "plan") {
+        setCurrentStep("loyalty");
+      } else if (onboarding.step === "location") {
+        setCurrentStep("launch");
+      } else if (["business", "loyalty", "reward", "launch"].includes(onboarding.step)) {
+        setCurrentStep(onboarding.step as OnboardingStepKey);
+      } else {
+        setCurrentStep("loyalty");
+      }
     } else {
-      setCurrentStep("plan");
+      setCurrentStep("loyalty");
     }
   }, [businessQuery.data, navigate]);
 
@@ -193,22 +199,24 @@ function OnboardingRoute() {
 
   if (!authReady || (user && (businessQuery.isLoading || adminRoleQuery.isLoading))) {
     return (
-      <div className="grid min-h-screen place-items-center bg-background">
-        <Loader2 className="size-7 animate-spin text-primary" />
+      <div className="grid min-h-screen place-items-center bg-[#09090b]">
+        <Loader2 className="size-8 animate-spin text-emerald-400" />
       </div>
     );
   }
 
+  // Not signed in: render dark AuthSignIn defaulted to signup mode
   if (!user) {
     return (
       <AuthSignIn
         ar={ar}
         redirectPath="/onboarding"
-        title={ar ? "تسجيل الدخول لبدء إعداد المنشأة" : "Sign in to set up your business"}
+        defaultMode="signup"
+        title={ar ? "ابدأ برنامج ولائك مجاناً" : "Start your loyalty program free"}
         description={
           ar
-            ? "أنشئ حساباً جديداً أو سجل الدخول لإطلاق بطاقتك الرقمية."
-            : "Create an account or sign in to configure your digital pass."
+            ? "بدون بطاقة ائتمانية. بطاقتك جاهزة في دقيقتين."
+            : "No credit card needed. Live in Apple Wallet in 2 minutes."
         }
       />
     );
@@ -217,9 +225,42 @@ function OnboardingRoute() {
   return (
     <OnboardingLayout
       currentStep={currentStep}
-      title={t("onboardingTitle")}
-      subtitle={t("onboardingSubtitle")}
+      title={
+        currentStep === "business"
+          ? ar
+            ? "الخطوة ١: هوية وبيانات المتجر"
+            : "Step 1: Store Identity"
+          : currentStep === "loyalty"
+            ? ar
+              ? "الخطوة ٢: استوديو تصميم البطاقة"
+              : "Step 2: Card Studio"
+            : currentStep === "reward"
+              ? ar
+                ? "الخطوة ٣: شروط ومكافأة الولاء"
+                : "Step 3: Reward Rules"
+              : ar
+                ? "الخطوة ٤: إطلاق برنامج الولاء ورمز QR"
+                : "Step 4: Launch & Counter QR"
+      }
+      subtitle={
+        currentStep === "business"
+          ? ar
+            ? "أدخل اسم متجرك لإنشاء بطاقة Apple Wallet الخاصة بك."
+            : "Enter your business details to create your Apple Wallet pass."
+          : currentStep === "loyalty"
+            ? ar
+              ? "اختر النموذج المناسب لنشاطك وخصص الألوان وعدد الأختام."
+              : "Choose an industry template or customize your card colors."
+            : currentStep === "reward"
+              ? ar
+                ? "حدد الهدية التي تظهر لعملائك بمجرد جمع الأختام."
+                : "Specify the gift customers earn upon collecting stamps."
+              : ar
+                ? "اطبع الرمز وضعه على الكاونتر للبدء باستقبال العملاء."
+                : "Place your QR code on the counter to begin enrolling customers."
+      }
     >
+      {/* Step 1: Business Identity */}
       {currentStep === "business" && (
         <BusinessSetupStep
           onSuccess={(biz) => {
@@ -230,29 +271,22 @@ function OnboardingRoute() {
               name_en: biz.name_en,
               plan: biz.effective_plan,
               program_type: "stamp",
-              offer_ar: "",
-              offer_en: "",
-              brand_color: "#059669",
-              accent_color: "#F59E0B",
-              target_stamps: 9,
+              offer_ar: "مكافأة خاصة بعد 8 زيارات 🎁",
+              offer_en: "Special reward after 8 visits 🎁",
+              brand_color: "#121214",
+              accent_color: "#10B981",
+              target_stamps: 8,
               sar_per_point: 10,
               points_per_reward: 100,
+              stamp_icon: "⭐",
             });
-            setCurrentStep("plan");
-          }}
-        />
-      )}
-
-      {currentStep === "plan" && createdBusiness && (
-        <PlanSelectionStep
-          businessId={createdBusiness.id}
-          initialPlan={createdBusiness.plan}
-          onSuccess={() => {
+            // Advance straight to loyalty (skipping manual plan screen)
             setCurrentStep("loyalty");
           }}
         />
       )}
 
+      {/* Step 2: Card Studio */}
       {currentStep === "loyalty" && createdBusiness && (
         <LoyaltySetupStep
           businessId={createdBusiness.id}
@@ -261,32 +295,41 @@ function OnboardingRoute() {
           initialProgram={createdBusiness.program_type}
           initialBrandColor={createdBusiness.brand_color}
           initialAccentColor={createdBusiness.accent_color}
-          onSuccess={(program, brandColor, accentColor) => {
+          initialTargetStamps={createdBusiness.target_stamps ?? 8}
+          initialStampIcon={createdBusiness.stamp_icon ?? "⭐"}
+          onSuccess={(config) => {
             setCreatedBusiness((prev) =>
               prev
                 ? {
                     ...prev,
-                    program_type: program,
-                    brand_color: brandColor,
-                    accent_color: accentColor,
+                    program_type: config.program,
+                    brand_color: config.brandColor,
+                    accent_color: config.accentColor,
+                    targetStamps: config.targetStamps,
+                    stamp_icon: config.stampIcon,
+                    offer_ar: config.suggestedRewardAr,
+                    offer_en: config.suggestedRewardEn,
                   }
                 : null,
             );
+            // Advance straight to reward
             setCurrentStep("reward");
           }}
-          onBack={() => setCurrentStep("plan")}
+          onBack={() => setCurrentStep("business")}
         />
       )}
 
+      {/* Step 3: Reward Rules */}
       {currentStep === "reward" && createdBusiness && (
         <RewardSetupStep
           businessId={createdBusiness.id}
           program={createdBusiness.program_type}
           initialOfferAr={createdBusiness.offer_ar}
           initialOfferEn={createdBusiness.offer_en}
-          initialTargetStamps={createdBusiness.target_stamps ?? 9}
+          initialTargetStamps={createdBusiness.target_stamps ?? 8}
           initialSarPerPoint={createdBusiness.sar_per_point ?? 10}
           initialPointsPerReward={createdBusiness.points_per_reward}
+          stampIcon={createdBusiness.stamp_icon ?? "⭐"}
           onSuccess={(rules) => {
             setCreatedBusiness((prev) =>
               prev
@@ -300,29 +343,21 @@ function OnboardingRoute() {
                   }
                 : null,
             );
-            setCurrentStep("location");
+            // Advancing from reward progresses directly to launch (skipping location step)
+            setCurrentStep("launch");
           }}
           onBack={() => setCurrentStep("loyalty")}
         />
       )}
 
-      {currentStep === "location" && createdBusiness && (
-        <MainLocationStep
-          businessId={createdBusiness.id}
-          onSuccess={() => {
-            setCurrentStep("launch");
-          }}
-          onBack={() => setCurrentStep("reward")}
-        />
-      )}
-
+      {/* Step 4: Launch & Counter QR */}
       {currentStep === "launch" && createdBusiness && (
         <LaunchStep
           business={createdBusiness}
           onFinish={() => {
             void navigate({ to: "/dashboard", replace: true });
           }}
-          onBack={() => setCurrentStep("location")}
+          onBack={() => setCurrentStep("reward")}
         />
       )}
     </OnboardingLayout>

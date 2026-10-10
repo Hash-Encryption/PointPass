@@ -5,16 +5,14 @@ import {
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
-  QrCode,
   Copy,
   Download,
   ExternalLink,
-  Sparkles,
-  Building2,
   Store,
+  Sparkles,
+  QrCode,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { useLocale } from "@/lib/i18n";
 import { LocalQrCode, downloadQrCanvas } from "@/components/LocalQrCode";
 import { completeOnboardingFn } from "@/lib/onboarding.functions";
@@ -55,8 +53,8 @@ export function LaunchStep({ business, onFinish, onBack }: LaunchStepProps) {
   }
 
   function handleDownload() {
-    downloadQrCanvas(canvasInstance, `${business.slug}-qr.png`);
-    toast.success(ar ? "تم تحميل رمز QR بنجاح!" : "QR code downloaded!");
+    downloadQrCanvas(canvasInstance, `${business.slug}-counter-qr.png`);
+    toast.success(ar ? "تم تحميل رمز QR للكاونتر بنجاح!" : "Counter QR downloaded!");
   }
 
   async function handleComplete() {
@@ -80,7 +78,11 @@ export function LaunchStep({ business, onFinish, onBack }: LaunchStepProps) {
         },
       });
 
-      toast.success(t("onboardingCompleted"));
+      toast.success(
+        ar
+          ? "تم إكمال الإعداد بنجاح! مرحباً بك في لوحة تحكم متجرك."
+          : "Setup completed! Welcome to your dashboard.",
+      );
       onFinish();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err));
@@ -88,99 +90,159 @@ export function LaunchStep({ business, onFinish, onBack }: LaunchStepProps) {
     }
   }
 
+  const ArrowIcon = ar ? ArrowLeft : ArrowRight;
+
   return (
     <div className="space-y-6">
-      <div className="text-center space-y-1.5 pb-3 border-b border-border/60">
-        <div className="size-12 rounded-2xl bg-primary/10 text-primary flex items-center justify-center mx-auto mb-2">
-          <CheckCircle2 className="size-6" />
+      {/* Celebration Header */}
+      <div className="text-center space-y-2 pb-4 border-b border-zinc-800">
+        <div className="size-14 rounded-3xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center mx-auto shadow-[0_0_25px_rgba(16,185,129,0.2)]">
+          <CheckCircle2 className="size-8" />
         </div>
-        <h2 className="text-xl font-bold">{t("stepLaunch")}</h2>
-        <p className="text-xs text-muted-foreground max-w-md mx-auto">
+        <h2 className="text-xl sm:text-2xl font-extrabold text-white tracking-tight">
+          {ar ? "بطاقتك جاهزة للإطلاق! 🎉" : "Your Pass is Ready to Launch! 🎉"}
+        </h2>
+        <p className="text-xs sm:text-sm text-zinc-400 max-w-md mx-auto">
           {ar
-            ? "تم إعداد برنامج الولاء وبطاقتك الرقمية بنجاح. بطاقتك جاهزة الآن لاستقبال العملاء!"
-            : "Your loyalty program and digital pass are ready for customer enrollment!"}
+            ? "تم إعداد برنامج الولاء وبطاقتك الرقمية بنجاح. اطبع رمز QR وضعه على الكاونتر للبدء."
+            : "Your loyalty program and Apple Wallet pass are ready for customer enrollment."}
         </p>
       </div>
 
-      {/* Summary Review Cards */}
-      <div className="grid gap-3 sm:grid-cols-2 text-xs">
-        <div className="rounded-xl border border-border/80 bg-muted/20 p-3 space-y-1">
-          <div className="text-muted-foreground flex items-center gap-1.5 font-medium">
-            <Building2 className="size-3.5 text-primary" />
-            {t("stepBusiness")}
+      {/* Prominent Counter QR Showcase Box */}
+      <div className="rounded-3xl border border-zinc-800 bg-zinc-950/80 p-6 sm:p-8 text-center space-y-5 shadow-2xl backdrop-blur-md">
+        <div className="inline-block relative">
+          <div className="p-3.5 rounded-2xl bg-white shadow-[0_0_35px_rgba(255,255,255,0.15)] inline-block">
+            <LocalQrCode
+              text={joinUrl}
+              size={190}
+              onReady={(canvas) => setCanvasInstance(canvas)}
+            />
           </div>
-          <div className="font-bold text-sm text-foreground">
+          <div className="absolute -bottom-2 inset-x-0 mx-auto w-fit bg-zinc-900 border border-zinc-700 px-3 py-0.5 rounded-full text-[10px] font-mono text-zinc-300 shadow-sm flex items-center gap-1.5">
+            <QrCode className="size-3 text-emerald-400" />
+            <span>COUNTER QR</span>
+          </div>
+        </div>
+
+        {/* Counter Guide Callout per specification */}
+        <div className="max-w-md mx-auto p-4 rounded-2xl bg-zinc-900/90 border border-zinc-800 text-center space-y-1">
+          <div className="flex items-center justify-center gap-1.5 text-xs font-bold text-emerald-400">
+            <Sparkles className="size-3.5" />
+            <span>{ar ? "دليل الكاونتر" : "Counter Placement Guide"}</span>
+          </div>
+          <p className="text-xs text-zinc-300 leading-relaxed">
+            {ar
+              ? "ضع هذا الرمز على الكاونتر. يمسح العميل الرمز بكاميرا الجوال ليضيف بطاقة الولاء إلى Apple Wallet أو Google Wallet في ثوانٍ."
+              : "Place this QR code on your counter. Customers scan it with their phone camera to add the loyalty pass to Apple Wallet or Google Wallet in seconds."}
+          </p>
+        </div>
+
+        {/* Direct Action Buttons: Download QR & Copy Link */}
+        <div className="flex flex-wrap justify-center gap-2.5 max-w-md mx-auto">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleDownload}
+            className="h-11 px-4 text-xs font-semibold rounded-xl border-zinc-700 bg-zinc-900 hover:bg-zinc-800 text-white flex items-center gap-2 shadow-xs"
+          >
+            <Download className="size-4 text-emerald-400" />
+            <span>{ar ? "تحميل رمز QR للكاونتر (PNG)" : "Download Counter QR (PNG)"}</span>
+          </Button>
+
+          <Button
+            type="button"
+            variant="outline"
+            onClick={copyJoinLink}
+            className="h-11 px-4 text-xs font-semibold rounded-xl border-zinc-700 bg-zinc-900 hover:bg-zinc-800 text-white flex items-center gap-2 shadow-xs"
+          >
+            <Copy className="size-4 text-emerald-400" />
+            <span>{ar ? "نسخ رابط الانضمام" : "Copy Join Link"}</span>
+          </Button>
+
+          <Button
+            type="button"
+            variant="ghost"
+            asChild
+            className="h-11 px-3 text-xs text-zinc-400 hover:text-white rounded-xl"
+          >
+            <a href={joinUrl} target="_blank" rel="noopener noreferrer">
+              <ExternalLink className="size-3.5 me-1 text-zinc-500" />
+              <span>{ar ? "معاينة صفحة العميل" : "Preview Customer Page"}</span>
+            </a>
+          </Button>
+        </div>
+
+        {/* Join URL display bar */}
+        <div className="rounded-xl border border-zinc-850 bg-zinc-950 p-2.5 max-w-md mx-auto flex items-center justify-between gap-2 text-start">
+          <div className="truncate font-mono text-[11px] text-zinc-400 select-all" dir="ltr">
+            {joinUrl}
+          </div>
+          <button
+            type="button"
+            onClick={copyJoinLink}
+            className="shrink-0 text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 px-2 py-0.5 rounded-md hover:bg-emerald-500/10 transition-colors"
+          >
+            {ar ? "نسخ" : "Copy"}
+          </button>
+        </div>
+      </div>
+
+      {/* Program Summary Recap */}
+      <div className="grid gap-3 sm:grid-cols-2 text-xs">
+        <div className="rounded-2xl border border-zinc-850 bg-zinc-950/60 p-3.5 space-y-1">
+          <div className="text-zinc-400 flex items-center gap-1.5 font-medium">
+            <Store className="size-3.5 text-emerald-400" />
+            <span>{ar ? "اسم المتجر والمعرف" : "Store Name & Slug"}</span>
+          </div>
+          <div className="font-bold text-sm text-white">
             {ar ? business.name_ar : business.name_en}
           </div>
-          <div className="text-muted-foreground font-mono text-[11px]" dir="ltr">
+          <div className="text-zinc-500 font-mono text-[11px]" dir="ltr">
             slug: {business.slug}
           </div>
         </div>
 
-        <div className="rounded-xl border border-border/80 bg-muted/20 p-3 space-y-1">
-          <div className="text-muted-foreground flex items-center gap-1.5 font-medium">
-            <Store className="size-3.5 text-primary" />
-            {t("stepLocation")}
+        <div className="rounded-2xl border border-zinc-850 bg-zinc-950/60 p-3.5 space-y-1">
+          <div className="text-zinc-400 flex items-center gap-1.5 font-medium">
+            <Sparkles className="size-3.5 text-emerald-400" />
+            <span>{ar ? "المكافأة المسجلة" : "Configured Reward"}</span>
           </div>
-          <div className="font-bold text-sm text-foreground">
-            {ar ? "الفرع الرئيسي" : "Main Location"}
+          <div className="font-bold text-sm text-white">
+            {ar
+              ? business.offer_ar || "مكافأة برنامج الولاء"
+              : business.offer_en || "Loyalty reward"}
           </div>
-          <div className="text-muted-foreground">{t("active")} (1 / 1)</div>
+          <div className="text-emerald-400 font-medium text-[11px]">
+            {ar ? "مفعل وجاهز للاستقبال" : "Active & Ready"}
+          </div>
         </div>
       </div>
 
-      {/* QR & Join Code Box */}
-      <div className="rounded-2xl border border-border bg-card p-5 text-center space-y-4">
-        <div className="flex justify-center">
-          <LocalQrCode text={joinUrl} size={180} onReady={(canvas) => setCanvasInstance(canvas)} />
-        </div>
-
-        <div className="rounded-xl border border-border bg-muted/40 p-2.5 flex items-center justify-between gap-2">
-          <div className="truncate font-mono text-xs text-foreground" dir="ltr">
-            {joinUrl}
-          </div>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={copyJoinLink}
-            className="shrink-0 text-xs h-7 px-2"
-          >
-            <Copy className="size-3.5 me-1" />
-            {ar ? "نسخ" : "Copy"}
-          </Button>
-        </div>
-
-        <div className="flex flex-wrap justify-center gap-2">
-          <Button size="sm" variant="outline" onClick={handleDownload} className="text-xs h-9">
-            <Download className="size-3.5 me-1.5" />
-            {ar ? "تحميل رمز QR" : "Download QR"}
-          </Button>
-          <Button size="sm" variant="outline" asChild className="text-xs h-9">
-            <a href={joinUrl} target="_blank" rel="noopener noreferrer">
-              <ExternalLink className="size-3.5 me-1.5" />
-              {ar ? "معاينة صفحة العميل" : "Preview Page"}
-            </a>
-          </Button>
-        </div>
-      </div>
-
-      <div className="pt-3 border-t border-border/60 flex items-center justify-between">
-        <Button variant="outline" onClick={onBack} disabled={completing}>
-          {t("prevStep")}
+      {/* Navigation Footer & Primary Action CTA */}
+      <div className="pt-4 border-t border-zinc-800 flex items-center justify-between">
+        <Button
+          type="button"
+          variant="outline"
+          onClick={onBack}
+          disabled={completing}
+          className="border-zinc-800 bg-zinc-950 hover:bg-zinc-900 text-zinc-300 rounded-xl"
+        >
+          {ar ? "← السابق" : "← Previous"}
         </Button>
 
-        <Button onClick={handleComplete} disabled={completing} className="h-11 px-6 font-semibold">
+        {/* Primary Action CTA per specification */}
+        <Button
+          onClick={handleComplete}
+          disabled={completing}
+          className="h-12 px-8 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold text-sm sm:text-base shadow-[0_0_25px_rgba(16,185,129,0.35)] transition-all flex items-center justify-center gap-2"
+        >
           {completing ? (
-            <Loader2 className="size-4 animate-spin me-2" />
-          ) : ar ? (
-            <>
-              {t("confirmAndComplete")}
-              <ArrowLeft className="size-4 ms-2" />
-            </>
+            <Loader2 className="size-4 animate-spin text-zinc-950" />
           ) : (
             <>
-              {t("confirmAndComplete")}
-              <ArrowRight className="size-4 ms-2" />
+              <span>{ar ? "فتح لوحة التحكم ←" : "Open Dashboard →"}</span>
+              <ArrowIcon className="size-4.5" />
             </>
           )}
         </Button>
