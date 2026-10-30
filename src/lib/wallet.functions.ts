@@ -4,7 +4,11 @@ import { z } from "zod";
 // @ts-expect-error Cloudflare supplies this runtime module to Pages Functions.
 import { env } from "cloudflare:workers";
 import { createServerSupabaseClient } from "@/lib/server-supabase";
-import { buildWalletPassPayload } from "@/lib/wallet-payload";
+import {
+  buildBaselineWalletPassPayload,
+  buildWalletPassPayload,
+  type WalletPassState,
+} from "@/lib/wallet-payload";
 import { generateStampStripDataUri, resolveStampIcon } from "@/lib/strip-generator";
 import { captureAppError } from "@/lib/observability";
 
@@ -103,11 +107,24 @@ async function walletFetch(method: "POST" | "PUT", path: string, body: unknown) 
     };
   }
   if (!res.ok) {
-    console.error(`WalletWallet ${path} failed [${res.status}]`);
+    let errorDetail = `WalletWallet request failed (${res.status})`;
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed.error === "string") {
+        errorDetail = parsed.error;
+      } else if (parsed && typeof parsed.message === "string") {
+        errorDetail = parsed.message;
+      }
+    } catch {
+      if (text && text.length < 200) {
+        errorDetail = text;
+      }
+    }
+    console.error(`WalletWallet ${path} failed [${res.status}]: ${errorDetail}`);
     return {
       ok: false as const,
       status: res.status,
-      error: `WalletWallet request failed (${res.status})`,
+      error: errorDetail,
       data: null,
     };
   }
@@ -233,25 +250,40 @@ export const createWalletPass = createServerFn({ method: "POST" })
     }
 
     // Build payload using actual loyalty state (never 0 if resumed)
-    const result = await walletFetch(
-      "POST",
-      "/passes",
-      buildWalletPassPayload({
-        serial: claim.pass_serial,
-        businessName: claim.business_name,
-        offer: claim.business_offer,
-        programType: claim.pass_program_type,
-        stamps: currentStamps,
-        points: claim.pass_points ?? 0,
-        morphed: claim.pass_morphed ?? false,
-        targetStamps,
-        brandColor: biz?.brand_color,
-        accentColor: biz?.accent_color,
-        stripUrl,
-        stripDataUri,
-        logoUrl: biz?.logo_url,
-      }),
-    );
+    const passState: WalletPassState = {
+      serial: claim.pass_serial,
+      businessName: claim.business_name,
+      offer: claim.business_offer,
+      programType: claim.pass_program_type,
+      stamps: currentStamps,
+      points: claim.pass_points ?? 0,
+      morphed: claim.pass_morphed ?? false,
+      targetStamps,
+      brandColor: biz?.brand_color,
+      accentColor: biz?.accent_color,
+      stripUrl,
+      stripDataUri,
+      logoUrl: biz?.logo_url,
+    };
+
+    let result = await walletFetch("POST", "/passes", buildWalletPassPayload(passState));
+
+    // Automatic fallback for Free-tier accounts:
+    // If WalletWallet returns 400/403 (e.g. "color/stripURL is only available on the Pro plan"),
+    // retry immediately with baseline free-tier payload so pass generation succeeds 100%.
+    if (
+      !result.ok &&
+      (result.status === 400 ||
+        result.status === 403 ||
+        result.error?.toLowerCase().includes("pro") ||
+        result.error?.toLowerCase().includes("plan"))
+    ) {
+      console.warn(
+        "WalletWallet rich pass rejected, falling back to baseline payload:",
+        result.error,
+      );
+      result = await walletFetch("POST", "/passes", buildBaselineWalletPassPayload(passState));
+    }
     if (!result.ok) {
       // Graceful fallback so the claim flow stays usable while credentials pend.
       return {
@@ -420,26 +452,42 @@ export const updateWalletPass = createServerFn({ method: "POST" })
       }
     }
 
-    const result = await walletFetch(
+    const passState: WalletPassState = {
+      serial: state.pass_serial,
+      businessName: state.business_name,
+      offer: state.business_offer,
+      programType: state.pass_program_type,
+      stamps: currentStamps,
+      points: state.pass_points,
+      morphed: state.pass_morphed,
+      targetStamps,
+      brandColor: biz?.brand_color,
+      accentColor: biz?.accent_color,
+      stripUrl,
+      stripDataUri,
+      logoUrl: biz?.logo_url,
+      ...(data.action === "redeem" ? { notification: "Reward redeemed" } : {}),
+    };
+
+    let result = await walletFetch(
       "PUT",
       `/passes/${encodeURIComponent(state.wallet_serial)}`,
-      buildWalletPassPayload({
-        serial: state.pass_serial,
-        businessName: state.business_name,
-        offer: state.business_offer,
-        programType: state.pass_program_type,
-        stamps: currentStamps,
-        points: state.pass_points,
-        morphed: state.pass_morphed,
-        targetStamps,
-        brandColor: biz?.brand_color,
-        accentColor: biz?.accent_color,
-        stripUrl,
-        stripDataUri,
-        logoUrl: biz?.logo_url,
-        ...(data.action === "redeem" ? { notification: "Reward redeemed" } : {}),
-      }),
+      buildWalletPassPayload(passState),
     );
+
+    if (
+      !result.ok &&
+      (result.status === 400 ||
+        result.status === 403 ||
+        result.error?.toLowerCase().includes("pro") ||
+        result.error?.toLowerCase().includes("plan"))
+    ) {
+      result = await walletFetch(
+        "PUT",
+        `/passes/${encodeURIComponent(state.wallet_serial)}`,
+        buildBaselineWalletPassPayload(passState),
+      );
+    }
     return {
       ok: result.ok,
       recorded: true as const,
@@ -509,7 +557,7 @@ export const sendWalletPush = createServerFn({ method: "POST" })
     const targetStamps = business.target_stamps ?? 9;
 
     const results = await Promise.all(
-      passes.map((pass) => {
+      passes.map(async (pass) => {
         const isStampCard = pass.program_type === "stamp" || pass.program_type === "coupon_morph";
         let stripDataUri: string | undefined;
         let stripUrl: string | undefined;
@@ -542,26 +590,44 @@ export const sendWalletPush = createServerFn({ method: "POST" })
           }
         }
 
-        return walletFetch(
+        const passState: WalletPassState = {
+          serial: pass.serial,
+          businessName: business.name_en,
+          offer: business.offer_en ?? "",
+          programType: pass.program_type,
+          stamps: pass.stamps,
+          points: pass.points,
+          morphed: pass.morphed,
+          targetStamps,
+          notification,
+          brandColor: business.brand_color,
+          accentColor: business.accent_color,
+          stripUrl,
+          stripDataUri,
+          logoUrl: business.logo_url,
+        };
+
+        const res = await walletFetch(
           "PUT",
           `/passes/${encodeURIComponent(pass.wallet_serial!)}`,
-          buildWalletPassPayload({
-            serial: pass.serial,
-            businessName: business.name_en,
-            offer: business.offer_en ?? "",
-            programType: pass.program_type,
-            stamps: pass.stamps,
-            points: pass.points,
-            morphed: pass.morphed,
-            targetStamps,
-            notification,
-            brandColor: business.brand_color,
-            accentColor: business.accent_color,
-            stripUrl,
-            stripDataUri,
-            logoUrl: business.logo_url,
-          }),
+          buildWalletPassPayload(passState),
         );
+
+        if (
+          !res.ok &&
+          (res.status === 400 ||
+            res.status === 403 ||
+            res.error?.toLowerCase().includes("pro") ||
+            res.error?.toLowerCase().includes("plan"))
+        ) {
+          return walletFetch(
+            "PUT",
+            `/passes/${encodeURIComponent(pass.wallet_serial!)}`,
+            buildBaselineWalletPassPayload(passState),
+          );
+        }
+
+        return res;
       }),
     );
     const failed = results.filter((result) => !result.ok).length;

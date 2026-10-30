@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { buildWalletPassPayload } from "../src/lib/wallet-payload.ts";
+import {
+  buildBaselineWalletPassPayload,
+  buildWalletPassPayload,
+  resolveColorPreset,
+} from "../src/lib/wallet-payload.ts";
 
 const payload = buildWalletPassPayload({
   serial: "pass-1",
@@ -96,6 +100,48 @@ assert.equal(
   "https://pointpass.me/api/strip/bayroast.png?stamps=8&target=8",
 );
 assert.equal(httpsStripPass.headerFields[0].value, "8/8");
+
+// Assert color preset resolver maps arbitrary hexes to valid WalletWallet presets
+assert.equal(resolveColorPreset("#121214"), "dark");
+assert.equal(resolveColorPreset("#09090b"), "dark");
+assert.equal(resolveColorPreset("#10b981"), "green");
+assert.equal(resolveColorPreset("#2563eb"), "blue");
+assert.equal(resolveColorPreset("#dc2626"), "red");
+assert.equal(resolveColorPreset("#d97706"), "orange");
+assert.equal(resolveColorPreset("#7c3aed"), "purple");
+assert.equal(resolveColorPreset(null, null), "dark");
+
+// Assert baseline fallback payload has 100% Free-tier compatibility
+const baseline = buildBaselineWalletPassPayload({
+  serial: "free-pass-1",
+  businessName: "Free Tier Business",
+  offer: "Buy 5 Get 1",
+  programType: "stamp",
+  stamps: 2,
+  points: 0,
+  morphed: false,
+  targetStamps: 6,
+  brandColor: "#121214",
+  accentColor: "#10b981",
+  stripUrl: "https://example.com/strip.png",
+  stripDataUri: "data:image/png;base64,...",
+  logoUrl: "https://example.com/logo.png",
+});
+
+// Pro-only properties MUST be omitted in baseline payload
+assert.equal(baseline.stripURL, undefined, "Baseline payload must not contain stripURL");
+assert.equal(baseline.color, undefined, "Baseline payload must not contain custom hex color");
+assert.equal(baseline.logoURL, undefined, "Baseline payload must not contain logoURL");
+
+// Free-compatible properties MUST be present
+assert.equal(baseline.barcodeValue, "free-pass-1");
+assert.equal(baseline.barcodeFormat, "QR");
+assert.equal(baseline.logoText, "Free Tier Business");
+assert.equal(baseline.colorPreset, "dark");
+assert.equal(baseline.primaryFields[0].label, "STAMPS");
+assert.equal(baseline.primaryFields[0].value, "2/6");
+assert.equal(baseline.secondaryFields[0].label, "REWARD");
+assert.equal(baseline.secondaryFields[0].value, "Buy 5 Get 1");
 
 const walletSource = readFileSync(
   new URL("../src/lib/wallet.functions.ts", import.meta.url),

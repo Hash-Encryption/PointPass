@@ -136,11 +136,21 @@ function ClaimPage() {
           window.location.href = targetUrl;
         }
       } else {
-        toast.info(
-          ar
-            ? "تم تسجيل بطاقتك — تفعيل التحميل يتطلب مفتاح WalletWallet"
-            : "Pass registered — instant wallet download activates with WalletWallet key",
-        );
+        const isConfigIncomplete =
+          res.error?.includes("configuration is incomplete") ||
+          res.error?.includes("WalletWallet key");
+        if (isConfigIncomplete) {
+          toast.info(
+            ar
+              ? "تم تسجيل بطاقتك — تفعيل التحميل يتطلب مفتاح WalletWallet"
+              : "Pass registered — instant wallet download activates with WalletWallet key",
+          );
+        } else {
+          toast.error(
+            res.error ||
+              (ar ? "تعذر تحميل البطاقة تلقائياً" : "Unable to load wallet pass automatically"),
+          );
+        }
       }
     } catch (error) {
       toast.error(
