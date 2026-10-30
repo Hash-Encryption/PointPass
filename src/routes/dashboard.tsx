@@ -16,6 +16,20 @@ import { PassPreview, type PassDesign } from "@/components/PassPreview";
 import { useLocale } from "@/lib/i18n";
 import { supabase } from "@/lib/supabase";
 import { PASS_TEMPLATES, autoContrast, type ProgramType } from "@/constants/defaultTemplates";
+import {
+  getStoredWalletTier,
+  parsePassTemplateMeta,
+  serializePassTemplateMeta,
+  STRIP_STYLES,
+  WALLET_COLOR_PRESETS,
+  type StripStyle,
+  type WalletColorPreset,
+  type WalletTierMode,
+} from "@/lib/wallet-tier";
+import { CURATED_TEMPLATES, type CuratedTemplate } from "@/components/onboarding/LoyaltySetupStep";
+
+const STAMP_COUNTS = [5, 6, 7, 8, 10];
+const STAMP_ICONS = ["⭐", "☕", "🍔", "🥐", "✂️", "🚗", "🎁"];
 import { sendWalletPush } from "@/lib/wallet.functions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,6 +42,9 @@ import { Badge } from "@/components/ui/badge";
 import {
   Activity,
   AlertTriangle,
+  ShieldCheck,
+  Sparkles,
+  Zap,
   Building2,
   Copy,
   CreditCard,
@@ -82,6 +99,7 @@ type Business = {
   longitude: number | null;
   geo_text_ar: string | null;
   geo_text_en: string | null;
+  template_id?: string | null;
 };
 
 function MerchantDashboard() {
@@ -92,6 +110,11 @@ function MerchantDashboard() {
   const [businessId, setBusinessId] = useState("");
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
+  const [tierMode, setTierMode] = useState<WalletTierMode>(getStoredWalletTier);
+  const [colorPreset, setColorPreset] = useState<WalletColorPreset>("dark");
+  const [stripStyle, setStripStyle] = useState<StripStyle>("pizzatown");
+  const [stampIcon, setStampIcon] = useState<string>("⭐");
+  const [activeTemplateId, setActiveTemplateId] = useState<string>("custom");
 
   const [program, setProgram] = useState<ProgramType>("stamp");
   const tpl = PASS_TEMPLATES[program];
@@ -128,6 +151,15 @@ function MerchantDashboard() {
   const [showResetPassword, setShowResetPassword] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [updatingPassword, setUpdatingPassword] = useState(false);
+
+  useEffect(() => {
+    function onTierChange(e: Event) {
+      const custom = e as CustomEvent<WalletTierMode>;
+      if (custom.detail) setTierMode(custom.detail);
+    }
+    window.addEventListener("pointpass:tier-change", onTierChange);
+    return () => window.removeEventListener("pointpass:tier-change", onTierChange);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -179,7 +211,7 @@ function MerchantDashboard() {
       const { data, error } = await supabase
         .from("businesses")
         .select(
-          "id,slug,name_ar,name_en,logo_url,brand_color,accent_color,program_type,offer_ar,offer_en,target_stamps,sar_per_point,points_per_reward,latitude,longitude,geo_text_ar,geo_text_en",
+          "id,slug,name_ar,name_en,logo_url,brand_color,accent_color,program_type,offer_ar,offer_en,target_stamps,sar_per_point,points_per_reward,latitude,longitude,geo_text_ar,geo_text_en,template_id",
         )
         .eq("status", "active")
         .order("created_at", { ascending: true });
@@ -195,6 +227,27 @@ function MerchantDashboard() {
     if (!business) return;
     if (!businessId) setBusinessId(business.id);
     setProgram(business.program_type);
+    let initialIcon = "⭐";
+    let initialStyle: StripStyle = "pizzatown";
+    let initialPreset: WalletColorPreset = "dark";
+    let initialBaseId = "custom";
+
+    if (business.template_id) {
+      const meta = parsePassTemplateMeta(business.template_id);
+      initialIcon = meta.stampIcon;
+      initialStyle = meta.stripStyle;
+      initialPreset = meta.colorPreset;
+      initialBaseId = meta.baseId || "custom";
+      if (meta.tierMode) {
+        setTierMode(meta.tierMode);
+      }
+    }
+
+    setStampIcon(initialIcon);
+    setStripStyle(initialStyle);
+    setColorPreset(initialPreset);
+    setActiveTemplateId(initialBaseId);
+
     setDesign({
       businessName: business.name_ar,
       businessNameEn: business.name_en,
@@ -328,6 +381,20 @@ function MerchantDashboard() {
     }
   }, [accessQuery.isSuccess, isOwnerUser, activeTab]);
 
+  function applyTemplate(tpl: CuratedTemplate) {
+    setActiveTemplateId(tpl.id);
+    setColorPreset(tpl.colorPreset);
+    setStampIcon(tpl.icon);
+    setDesign((d) => ({
+      ...d,
+      background: tpl.background,
+      accent: tpl.accent,
+      headline: ar ? tpl.rewardAr : tpl.rewardEn,
+      headlineEn: tpl.rewardEn,
+      targetStamps: tpl.targetStamps,
+    }));
+  }
+
   const fg = useMemo(() => autoContrast(design.background), [design.background]);
   function applyProgram(next: ProgramType) {
     setProgram(next);
@@ -391,19 +458,33 @@ function MerchantDashboard() {
       }
       logoUrl = supabase.storage.from("business-assets").getPublicUrl(path).data.publicUrl;
     }
+    const metaString = serializePassTemplateMeta({
+      baseId: activeTemplateId,
+      stampIcon,
+      stripStyle,
+      colorPreset,
+      tierMode,
+    });
+
+    const effectiveBrandColor =
+      tierMode === "free" ? WALLET_COLOR_PRESETS[colorPreset].hex : design.background;
+    const effectiveAccentColor =
+      tierMode === "free" ? WALLET_COLOR_PRESETS[colorPreset].accent : design.accent;
+
     await updateBusiness(
       {
         name_ar: design.businessName,
         name_en: design.businessNameEn,
         logo_url: logoUrl,
-        brand_color: design.background,
-        accent_color: design.accent,
+        brand_color: effectiveBrandColor,
+        accent_color: effectiveAccentColor,
         program_type: program,
         offer_ar: design.headline,
         offer_en: design.headlineEn,
         target_stamps: design.targetStamps,
         sar_per_point: design.sarPerPoint,
         points_per_reward: design.pointsPerReward,
+        template_id: metaString,
       },
       ar
         ? "تم حفظ تصميم البطاقة والانتقال إلى لوحة التحكم الرئيسية"
@@ -732,11 +813,102 @@ function MerchantDashboard() {
             <>
               <TabsContent
                 value="designer"
-                className="mt-4 grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]"
+                className="mt-4 grid gap-6 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]"
               >
-                <div className="panel space-y-5 p-6">
+                <div className="panel space-y-6 p-6">
+                  {/* Top Bar: Studio Header & Active Mode Badge */}
+                  <div className="flex items-center justify-between gap-3 pb-3 border-b border-border">
+                    <div className="flex items-center gap-2.5">
+                      <div className="size-9 rounded-xl bg-muted/60 border border-border text-primary flex items-center justify-center shrink-0">
+                        <Edit3 className="size-4" />
+                      </div>
+                      <div>
+                        <h2 className="text-base font-bold text-foreground">
+                          {ar ? "استوديو تصميم البطاقة" : "Card Design Studio"}
+                        </h2>
+                        <p className="text-xs text-muted-foreground">
+                          {ar
+                            ? "تخصيص كامل للألوان والأختام ونمط العرض"
+                            : "Customize card branding, stamps, and layout styles"}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="shrink-0">
+                      {tierMode === "free" ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                          <ShieldCheck className="size-3.5" />
+                          <span>{ar ? "وضع المجاني الفوري" : "Free Mode"}</span>
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
+                          <Zap className="size-3.5" />
+                          <span>{ar ? "وضع برو (Retina Strip)" : "Pro Studio"}</span>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* 1. Curated Templates Grid */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-xs font-semibold flex items-center gap-1.5">
+                        <Sparkles className="size-3.5 text-primary" />
+                        <span>
+                          {ar ? "نماذج جاهزة حسب نشاطك" : "Curated Templates by Industry"}
+                        </span>
+                      </Label>
+                      <span className="text-[11px] text-muted-foreground font-mono">
+                        {CURATED_TEMPLATES.find((t) => t.id === activeTemplateId)?.[
+                          ar ? "labelAr" : "labelEn"
+                        ] || (ar ? "مخصص" : "Custom")}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                      {CURATED_TEMPLATES.map((tpl) => {
+                        const isActive = activeTemplateId === tpl.id;
+                        return (
+                          <button
+                            type="button"
+                            key={tpl.id}
+                            onClick={() => applyTemplate(tpl)}
+                            className={`flex items-center gap-2 rounded-xl border p-2 text-start transition-all ${
+                              isActive
+                                ? "border-primary/50 bg-primary/10 shadow-xs ring-1 ring-primary/30"
+                                : "border-border bg-card/60 hover:border-border/80 hover:bg-muted/40"
+                            }`}
+                          >
+                            <span className="grid size-8 place-items-center rounded-lg bg-muted text-sm shrink-0">
+                              {tpl.pillIcon}
+                            </span>
+                            <div className="min-w-0 flex-1">
+                              <div className="text-xs font-bold text-foreground truncate">
+                                {ar ? tpl.labelAr : tpl.labelEn}
+                              </div>
+                              <div className="flex items-center gap-1 mt-0.5">
+                                <span
+                                  className="size-2 rounded-full shrink-0"
+                                  style={{ backgroundColor: tpl.background }}
+                                />
+                                <span
+                                  className="size-2 rounded-full shrink-0"
+                                  style={{ backgroundColor: tpl.accent }}
+                                />
+                                <span className="text-[10px] text-muted-foreground font-mono">
+                                  {tpl.targetStamps} {ar ? "أختام" : "stamps"}
+                                </span>
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Programs Selector */}
                   <div>
-                    <Label className="mb-2 block">{t("programs")}</Label>
+                    <Label className="mb-2 block text-xs font-semibold">{t("programs")}</Label>
                     <div className="flex flex-wrap gap-2">
                       {(["stamp", "points", "coupon_morph"] as ProgramType[]).map((p) => (
                         <Button
@@ -758,6 +930,7 @@ function MerchantDashboard() {
                     ) : null}
                   </div>
 
+                  {/* Business Names & Headlines */}
                   <div className="grid gap-3 sm:grid-cols-2">
                     <div>
                       <Label htmlFor="nameAr">
@@ -780,7 +953,9 @@ function MerchantDashboard() {
                       />
                     </div>
                     <div>
-                      <Label htmlFor="headAr">{ar ? "نص البطاقة (عربي)" : "Pass text (AR)"}</Label>
+                      <Label htmlFor="headAr">
+                        {ar ? "نص البطاقة / المكافأة (عربي)" : "Pass text / Reward (AR)"}
+                      </Label>
                       <Input
                         id="headAr"
                         value={design.headline}
@@ -789,7 +964,7 @@ function MerchantDashboard() {
                     </div>
                     <div>
                       <Label htmlFor="headEn">
-                        {ar ? "نص البطاقة (إنجليزي)" : "Pass text (EN)"}
+                        {ar ? "نص البطاقة / المكافأة (إنجليزي)" : "Pass text / Reward (EN)"}
                       </Label>
                       <Input
                         id="headEn"
@@ -799,48 +974,213 @@ function MerchantDashboard() {
                     </div>
                   </div>
 
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <div>
-                      <Label htmlFor="bg">{ar ? "لون الخلفية" : "Background color"}</Label>
-                      <div className="flex items-center gap-2">
-                        <Input
-                          id="bg"
-                          type="color"
-                          className="h-10 w-16 p-1"
-                          value={design.background}
-                          onChange={(e) => setDesign({ ...design, background: e.target.value })}
-                        />
-                        <Badge variant="secondary">
-                          {ar ? "تباين تلقائي:" : "Auto contrast:"} {fg}
-                        </Badge>
+                  {/* Stamp Program Controls */}
+                  {program !== "points" ? (
+                    <div className="space-y-4">
+                      {/* Compact 2-Column Row: Target Stamps + Stamp Icon */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 bg-muted/40 p-3.5 rounded-2xl border border-border">
+                        {/* Target Stamps */}
+                        <div className="space-y-1.5">
+                          <Label className="text-xs font-semibold">
+                            {ar ? "عدد الأختام المطلوبة" : "Target Stamps"}
+                          </Label>
+                          <div className="flex gap-1.5">
+                            {STAMP_COUNTS.map((cnt) => (
+                              <button
+                                type="button"
+                                key={cnt}
+                                onClick={() => setDesign({ ...design, targetStamps: cnt })}
+                                className={`flex-1 h-9 rounded-xl font-bold text-xs transition-all flex items-center justify-center ${
+                                  design.targetStamps === cnt
+                                    ? "bg-primary text-primary-foreground shadow-xs font-black scale-105"
+                                    : "bg-background border border-border text-foreground hover:border-border/80"
+                                }`}
+                              >
+                                {cnt}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Stamp Icon */}
+                        <div className="space-y-1.5">
+                          <Label className="text-xs font-semibold">
+                            {ar ? "رمز الختم" : "Stamp Icon"}
+                          </Label>
+                          <div className="flex gap-1.5 overflow-x-auto no-scrollbar py-0.5">
+                            {STAMP_ICONS.map((ic) => (
+                              <button
+                                type="button"
+                                key={ic}
+                                onClick={() => setStampIcon(ic)}
+                                className={`size-9 rounded-xl text-base transition-all flex items-center justify-center shrink-0 ${
+                                  stampIcon === ic
+                                    ? "bg-background border-2 border-primary shadow-xs scale-105"
+                                    : "bg-background border border-border text-foreground hover:border-border/80"
+                                }`}
+                              >
+                                {ic}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                    <div>
-                      <Label htmlFor="ac">{ar ? "لون التمييز" : "Accent color"}</Label>
-                      <Input
-                        id="ac"
-                        type="color"
-                        className="h-10 w-16 p-1"
-                        value={design.accent}
-                        onChange={(e) => setDesign({ ...design, accent: e.target.value })}
-                      />
-                    </div>
-                  </div>
 
-                  <div>
-                    <Label htmlFor="logo">{ar ? "شعار المنشأة" : "Brand logo"}</Label>
-                    <Input
-                      id="logo"
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => onLogo(e.target.files?.[0])}
-                    />
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {ar ? "يتم تحجيم الشعار تلقائياً إلى 40×40" : "Logo auto-resized to 40×40"}
-                    </p>
-                  </div>
+                      {/* Mode-Specific Color & Style Controls */}
+                      {tierMode === "free" ? (
+                        /* Free Mode: 6 Official Wallet Presets */
+                        <div className="space-y-3 bg-muted/30 p-4 rounded-2xl border border-border">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <Label className="text-xs font-semibold">
+                                {ar
+                                  ? "ألوان المحفظة الرسمية (Wallet Presets)"
+                                  : "Official Wallet Color Presets"}
+                              </Label>
+                              <p className="text-[11px] text-muted-foreground mt-0.5">
+                                {ar
+                                  ? "ألوان معتمدة وعالية التباين وتعمل 100% بدون أي قيود"
+                                  : "Native high-contrast presets compatible with all wallet accounts"}
+                              </p>
+                            </div>
+                          </div>
 
-                  {program === "points" ? (
+                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-1">
+                            {(Object.keys(WALLET_COLOR_PRESETS) as WalletColorPreset[]).map(
+                              (key) => {
+                                const preset = WALLET_COLOR_PRESETS[key];
+                                const isSelected = colorPreset === key;
+                                return (
+                                  <button
+                                    type="button"
+                                    key={key}
+                                    onClick={() => {
+                                      setColorPreset(key);
+                                      setActiveTemplateId("custom");
+                                    }}
+                                    className={`flex items-center gap-2.5 p-2.5 rounded-xl border text-start transition-all ${
+                                      isSelected
+                                        ? "border-primary bg-accent text-accent-foreground ring-1 ring-primary/40 shadow-xs"
+                                        : "border-border bg-card text-muted-foreground hover:border-border/80 hover:text-foreground"
+                                    }`}
+                                  >
+                                    <span
+                                      className="size-4 rounded-full border border-white/20 shrink-0"
+                                      style={{ backgroundColor: preset.hex }}
+                                    />
+                                    <span className="text-xs font-medium truncate">
+                                      {ar ? preset.nameAr : preset.nameEn}
+                                    </span>
+                                  </button>
+                                );
+                              },
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        /* Pro Mode: Strip Layout Style & Custom Hex & Logo */
+                        <div className="space-y-4 bg-muted/30 p-4 rounded-2xl border border-border">
+                          <div className="space-y-2">
+                            <Label className="text-xs font-semibold">
+                              {ar
+                                ? "نمط شريط الأختام (1080x360 Retina Banner)"
+                                : "Strip Layout Style"}
+                            </Label>
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                              {STRIP_STYLES.map((st) => {
+                                const isSelected = stripStyle === st.id;
+                                return (
+                                  <button
+                                    type="button"
+                                    key={st.id}
+                                    onClick={() => setStripStyle(st.id)}
+                                    className={`p-3 rounded-xl border text-start transition-all ${
+                                      isSelected
+                                        ? "border-amber-500 bg-accent text-accent-foreground ring-1 ring-amber-500/40 shadow-xs"
+                                        : "border-border bg-card text-muted-foreground hover:border-border/80 hover:text-foreground"
+                                    }`}
+                                  >
+                                    <p className="text-xs font-bold text-foreground">
+                                      {ar ? st.nameAr : st.nameEn}
+                                    </p>
+                                    <p className="text-[10px] text-muted-foreground mt-1 line-clamp-2">
+                                      {ar ? st.descriptionAr : st.descriptionEn}
+                                    </p>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+
+                          <div className="grid gap-3 sm:grid-cols-2 pt-2 border-t border-border">
+                            <div>
+                              <Label htmlFor="bg">
+                                {ar ? "لون خلفية البطاقة" : "Background color"}
+                              </Label>
+                              <div className="flex items-center gap-2 mt-1">
+                                <Input
+                                  id="bg"
+                                  type="color"
+                                  className="h-10 w-16 p-1 cursor-pointer"
+                                  value={design.background}
+                                  onChange={(e) => {
+                                    setDesign({ ...design, background: e.target.value });
+                                    setActiveTemplateId("custom");
+                                  }}
+                                />
+                                <Badge variant="secondary">
+                                  {ar ? "تباين تلقائي:" : "Auto contrast:"} {fg}
+                                </Badge>
+                              </div>
+                            </div>
+                            <div>
+                              <Label htmlFor="ac">
+                                {ar ? "لون التمييز والأختام" : "Accent color"}
+                              </Label>
+                              <div className="flex items-center gap-2 mt-1">
+                                <Input
+                                  id="ac"
+                                  type="color"
+                                  className="h-10 w-16 p-1 cursor-pointer"
+                                  value={design.accent}
+                                  onChange={(e) => {
+                                    setDesign({ ...design, accent: e.target.value });
+                                    setActiveTemplateId("custom");
+                                  }}
+                                />
+                                <Input
+                                  value={design.accent}
+                                  onChange={(e) => {
+                                    setDesign({ ...design, accent: e.target.value });
+                                    setActiveTemplateId("custom");
+                                  }}
+                                  dir="ltr"
+                                  className="font-mono text-xs h-10 w-28"
+                                />
+                              </div>
+                            </div>
+                          </div>
+
+                          <div>
+                            <Label htmlFor="logo">{ar ? "شعار المنشأة" : "Brand logo"}</Label>
+                            <Input
+                              id="logo"
+                              type="file"
+                              accept="image/*"
+                              onChange={(e) => onLogo(e.target.files?.[0])}
+                              className="mt-1"
+                            />
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {ar
+                                ? "يتم تحجيم الشعار تلقائياً إلى 40×40"
+                                : "Logo auto-resized to 40×40"}
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    /* Points Program Controls */
                     <div className="space-y-4">
                       <div>
                         <Label>
@@ -871,37 +1211,86 @@ function MerchantDashboard() {
                           }
                         />
                       </div>
-                    </div>
-                  ) : (
-                    <div>
-                      <Label>
-                        {ar
-                          ? `عدد الأختام المطلوبة: ${design.targetStamps}`
-                          : `Target stamps: ${design.targetStamps}`}
-                      </Label>
-                      <Slider
-                        min={3}
-                        max={12}
-                        step={1}
-                        value={[design.targetStamps]}
-                        onValueChange={([v]) => setDesign({ ...design, targetStamps: v ?? 9 })}
-                      />
+
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div>
+                          <Label htmlFor="bg">{ar ? "لون الخلفية" : "Background color"}</Label>
+                          <div className="flex items-center gap-2 mt-1">
+                            <Input
+                              id="bg"
+                              type="color"
+                              className="h-10 w-16 p-1 cursor-pointer"
+                              value={design.background}
+                              onChange={(e) => setDesign({ ...design, background: e.target.value })}
+                            />
+                            <Badge variant="secondary">
+                              {ar ? "تباين تلقائي:" : "Auto contrast:"} {fg}
+                            </Badge>
+                          </div>
+                        </div>
+                        <div>
+                          <Label htmlFor="ac">{ar ? "لون التمييز" : "Accent color"}</Label>
+                          <Input
+                            id="ac"
+                            type="color"
+                            className="h-10 w-16 p-1 mt-1 cursor-pointer"
+                            value={design.accent}
+                            onChange={(e) => setDesign({ ...design, accent: e.target.value })}
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <Label htmlFor="logo">{ar ? "شعار المنشأة" : "Brand logo"}</Label>
+                        <Input
+                          id="logo"
+                          type="file"
+                          accept="image/*"
+                          onChange={(e) => onLogo(e.target.files?.[0])}
+                          className="mt-1"
+                        />
+                      </div>
                     </div>
                   )}
 
-                  <Button onClick={saveDesign} disabled={saving}>
-                    {saving ? <Loader2 className="size-4 animate-spin" /> : t("save")}
-                  </Button>
-                  <p className="text-xs text-muted-foreground">
-                    {ar ? "قالب مرجعي:" : "Template:"} <code>{tpl.id}</code>
-                  </p>
+                  <div className="pt-2 flex items-center justify-between">
+                    <Button onClick={saveDesign} disabled={saving} className="gap-2">
+                      {saving ? <Loader2 className="size-4 animate-spin" /> : null}
+                      <span>{t("save")}</span>
+                    </Button>
+                    <span className="text-xs text-muted-foreground font-mono">
+                      {business.template_id || tpl.id}
+                    </span>
+                  </div>
                 </div>
 
-                <div className="panel p-6">
-                  <h2 className="mb-4 text-lg font-semibold">
-                    {ar ? "معاينة حية مزدوجة" : "Live dual preview"}
-                  </h2>
-                  <PassPreview design={design} locale={locale} />
+                <div className="panel p-6 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-lg font-semibold">
+                      {ar ? "معاينة حية مزدوجة" : "Live dual preview"}
+                    </h2>
+                    <span className="text-xs text-muted-foreground font-mono">
+                      {tierMode === "free" ? "Free 2-Col Emoji" : "Pro 1080x360 Strip"}
+                    </span>
+                  </div>
+                  <PassPreview
+                    design={{
+                      ...design,
+                      background:
+                        tierMode === "free"
+                          ? WALLET_COLOR_PRESETS[colorPreset].hex
+                          : design.background,
+                      accent:
+                        tierMode === "free"
+                          ? WALLET_COLOR_PRESETS[colorPreset].accent
+                          : design.accent,
+                      stampIcon,
+                      stripStyle,
+                      tierMode,
+                      colorPreset,
+                    }}
+                    locale={locale}
+                  />
                 </div>
               </TabsContent>
 

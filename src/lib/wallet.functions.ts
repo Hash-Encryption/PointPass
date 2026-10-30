@@ -9,6 +9,7 @@ import {
   buildWalletPassPayload,
   type WalletPassState,
 } from "@/lib/wallet-payload";
+import { parsePassTemplateMeta } from "@/lib/wallet-tier";
 import { generateStampStripDataUri, resolveStampIcon } from "@/lib/strip-generator";
 import { captureAppError } from "@/lib/observability";
 
@@ -53,6 +54,7 @@ function getPublicStripUrl(
   brandColor?: string | null,
   accentColor?: string | null,
   stampIcon?: string | null,
+  stripStyle?: string | null,
 ): string | undefined {
   try {
     const host = getRequestHeader("x-forwarded-host") ?? getRequestHeader("host");
@@ -68,6 +70,7 @@ function getPublicStripUrl(
     if (brandColor) params.set("brand", brandColor);
     if (accentColor) params.set("accent", accentColor);
     if (stampIcon) params.set("icon", stampIcon);
+    if (stripStyle) params.set("style", stripStyle);
     return `${origin}/api/strip/${encodeURIComponent(slug)}.png?${params.toString()}`;
   } catch {
     return undefined;
@@ -206,24 +209,47 @@ export const createWalletPass = createServerFn({ method: "POST" })
     // Query business visual branding (colors, logo, template metadata)
     const { data: biz } = await supabase
       .from("businesses")
-      .select("brand_color,accent_color,logo_url,offer_ar,offer_en")
+      .select("brand_color,accent_color,logo_url,offer_ar,offer_en,custom_domain")
       .eq("slug", data.slug)
       .maybeSingle();
 
+    let rawTemplateId: string | null = null;
+    try {
+      const { data: tplRow } = await supabase
+        .from("businesses")
+        .select("template_id")
+        .eq("slug", data.slug)
+        .maybeSingle();
+      if (tplRow && (tplRow as { template_id?: string | null }).template_id) {
+        rawTemplateId = (tplRow as { template_id?: string | null }).template_id!;
+      }
+    } catch {
+      // Table column may not exist yet
+    }
+
+    if (!rawTemplateId && biz?.custom_domain?.startsWith("tpl_")) {
+      rawTemplateId = biz.custom_domain;
+    }
+
+    const templateMeta = parsePassTemplateMeta(rawTemplateId);
     const targetStamps = claim.business_target_stamps || 8;
     const currentStamps = claim.pass_stamps ?? 0;
     const isStampCard =
       claim.pass_program_type === "stamp" || claim.pass_program_type === "coupon_morph";
 
+    const icon =
+      templateMeta.stampIcon !== "star"
+        ? templateMeta.stampIcon
+        : resolveStampIcon(
+            null,
+            biz?.offer_ar || biz?.offer_en || claim.business_offer,
+            biz?.brand_color,
+          );
+
     let stripDataUri: string | undefined;
     let stripUrl: string | undefined;
-    if (isStampCard) {
+    if (isStampCard && templateMeta.tierMode === "pro") {
       try {
-        const icon = resolveStampIcon(
-          null,
-          biz?.offer_ar || biz?.offer_en || claim.business_offer,
-          biz?.brand_color,
-        );
         stripUrl = getPublicStripUrl(
           data.slug,
           currentStamps,
@@ -231,6 +257,7 @@ export const createWalletPass = createServerFn({ method: "POST" })
           biz?.brand_color,
           biz?.accent_color,
           icon,
+          templateMeta.stripStyle,
         );
         if (!stripUrl) {
           stripDataUri = generateStampStripDataUri({
@@ -239,6 +266,7 @@ export const createWalletPass = createServerFn({ method: "POST" })
             brandColor: biz?.brand_color,
             accentColor: biz?.accent_color,
             stampIcon: icon,
+            stripStyle: templateMeta.stripStyle,
           });
         }
       } catch (stripErr) {
@@ -264,6 +292,10 @@ export const createWalletPass = createServerFn({ method: "POST" })
       stripUrl,
       stripDataUri,
       logoUrl: biz?.logo_url,
+      stampIcon: icon,
+      colorPreset: templateMeta.colorPreset,
+      stripStyle: templateMeta.stripStyle,
+      tierMode: templateMeta.tierMode,
     };
 
     let result = await walletFetch("POST", "/passes", buildWalletPassPayload(passState));
@@ -410,23 +442,47 @@ export const updateWalletPass = createServerFn({ method: "POST" })
     // Query business visual branding to update the strip image with the new stamp count
     const { data: biz } = await supabase
       .from("businesses")
-      .select("brand_color,accent_color,logo_url,offer_ar,offer_en")
+      .select("brand_color,accent_color,logo_url,offer_ar,offer_en,custom_domain")
       .eq("slug", data.slug)
       .maybeSingle();
 
+    let rawTemplateId: string | null = null;
+    try {
+      const { data: tplRow } = await supabase
+        .from("businesses")
+        .select("template_id")
+        .eq("slug", data.slug)
+        .maybeSingle();
+      if (tplRow && (tplRow as { template_id?: string | null }).template_id) {
+        rawTemplateId = (tplRow as { template_id?: string | null }).template_id!;
+      }
+    } catch {
+      // Table column may not exist yet
+    }
+
+    if (!rawTemplateId && biz?.custom_domain?.startsWith("tpl_")) {
+      rawTemplateId = biz.custom_domain;
+    }
+
+    const templateMeta = parsePassTemplateMeta(rawTemplateId);
     const targetStamps = state.business_target_stamps || 8;
     const currentStamps = state.pass_stamps ?? 0;
     const isStampCard =
       state.pass_program_type === "stamp" || state.pass_program_type === "coupon_morph";
+
+    const icon =
+      templateMeta.stampIcon !== "star"
+        ? templateMeta.stampIcon
+        : resolveStampIcon(
+            null,
+            biz?.offer_ar || biz?.offer_en || state.business_offer,
+            biz?.brand_color,
+          );
+
     let stripDataUri: string | undefined;
     let stripUrl: string | undefined;
-    if (isStampCard) {
+    if (isStampCard && templateMeta.tierMode === "pro") {
       try {
-        const icon = resolveStampIcon(
-          null,
-          biz?.offer_ar || biz?.offer_en || state.business_offer,
-          biz?.brand_color,
-        );
         stripUrl = getPublicStripUrl(
           data.slug,
           currentStamps,
@@ -434,6 +490,7 @@ export const updateWalletPass = createServerFn({ method: "POST" })
           biz?.brand_color,
           biz?.accent_color,
           icon,
+          templateMeta.stripStyle,
         );
         if (!stripUrl) {
           stripDataUri = generateStampStripDataUri({
@@ -442,6 +499,7 @@ export const updateWalletPass = createServerFn({ method: "POST" })
             brandColor: biz?.brand_color,
             accentColor: biz?.accent_color,
             stampIcon: icon,
+            stripStyle: templateMeta.stripStyle,
           });
         }
       } catch (stripErr) {
@@ -466,6 +524,10 @@ export const updateWalletPass = createServerFn({ method: "POST" })
       stripUrl,
       stripDataUri,
       logoUrl: biz?.logo_url,
+      stampIcon: icon,
+      colorPreset: templateMeta.colorPreset,
+      stripStyle: templateMeta.stripStyle,
+      tierMode: templateMeta.tierMode,
       ...(data.action === "redeem" ? { notification: "Reward redeemed" } : {}),
     };
 
@@ -526,7 +588,9 @@ export const sendWalletPush = createServerFn({ method: "POST" })
 
     const { data: business, error: businessError } = await supabase
       .from("businesses")
-      .select("id,name_en,offer_en,target_stamps,brand_color,accent_color,logo_url,offer_ar")
+      .select(
+        "id,name_en,offer_en,target_stamps,brand_color,accent_color,logo_url,offer_ar,custom_domain",
+      )
       .eq("id", data.businessId)
       .eq("slug", data.slug)
       .maybeSingle();
@@ -534,6 +598,26 @@ export const sendWalletPush = createServerFn({ method: "POST" })
     if (businessError || !business) {
       throw new Error("You cannot send campaigns for this business");
     }
+
+    let rawTemplateId: string | null = null;
+    try {
+      const { data: tplRow } = await supabase
+        .from("businesses")
+        .select("template_id")
+        .eq("id", data.businessId)
+        .maybeSingle();
+      if (tplRow && (tplRow as { template_id?: string | null }).template_id) {
+        rawTemplateId = (tplRow as { template_id?: string | null }).template_id!;
+      }
+    } catch {
+      // Table column may not exist yet
+    }
+
+    if (!rawTemplateId && business?.custom_domain?.startsWith("tpl_")) {
+      rawTemplateId = business.custom_domain;
+    }
+
+    const templateMeta = parsePassTemplateMeta(rawTemplateId);
 
     let passesQuery = supabase
       .from("pass_instances")
@@ -556,18 +640,18 @@ export const sendWalletPush = createServerFn({ method: "POST" })
     const notification = [data.titleEn.trim(), data.bodyEn.trim()].filter(Boolean).join(" — ");
     const targetStamps = business.target_stamps ?? 9;
 
+    const icon =
+      templateMeta.stampIcon !== "star"
+        ? templateMeta.stampIcon
+        : resolveStampIcon(null, business.offer_ar || business.offer_en, business.brand_color);
+
     const results = await Promise.all(
       passes.map(async (pass) => {
         const isStampCard = pass.program_type === "stamp" || pass.program_type === "coupon_morph";
         let stripDataUri: string | undefined;
         let stripUrl: string | undefined;
-        if (isStampCard) {
+        if (isStampCard && templateMeta.tierMode === "pro") {
           try {
-            const icon = resolveStampIcon(
-              null,
-              business.offer_ar || business.offer_en,
-              business.brand_color,
-            );
             stripUrl = getPublicStripUrl(
               data.slug,
               pass.stamps,
@@ -575,6 +659,7 @@ export const sendWalletPush = createServerFn({ method: "POST" })
               business.brand_color,
               business.accent_color,
               icon,
+              templateMeta.stripStyle,
             );
             if (!stripUrl) {
               stripDataUri = generateStampStripDataUri({
@@ -583,6 +668,7 @@ export const sendWalletPush = createServerFn({ method: "POST" })
                 brandColor: business.brand_color,
                 accentColor: business.accent_color,
                 stampIcon: icon,
+                stripStyle: templateMeta.stripStyle,
               });
             }
           } catch {
@@ -605,6 +691,10 @@ export const sendWalletPush = createServerFn({ method: "POST" })
           stripUrl,
           stripDataUri,
           logoUrl: business.logo_url,
+          stampIcon: icon,
+          colorPreset: templateMeta.colorPreset,
+          stripStyle: templateMeta.stripStyle,
+          tierMode: templateMeta.tierMode,
         };
 
         const res = await walletFetch(

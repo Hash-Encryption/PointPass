@@ -1,3 +1,12 @@
+import {
+  iconToEmoji,
+  type StripStyle,
+  type WalletColorPreset,
+  type WalletTierMode,
+} from "./wallet-tier.ts";
+
+export type { StripStyle, WalletColorPreset, WalletTierMode };
+
 export type WalletPassState = {
   serial: string;
   businessName: string;
@@ -13,9 +22,11 @@ export type WalletPassState = {
   stripDataUri?: string | null | undefined;
   stripUrl?: string | null | undefined;
   logoUrl?: string | null | undefined;
+  stampIcon?: string | null | undefined;
+  colorPreset?: WalletColorPreset | null | undefined;
+  stripStyle?: StripStyle | null | undefined;
+  tierMode?: WalletTierMode | null | undefined;
 };
-
-export type WalletColorPreset = "dark" | "blue" | "green" | "red" | "purple" | "orange";
 
 export function resolveColorPreset(
   brandColor?: string | null,
@@ -60,57 +71,150 @@ export function resolveColorPreset(
   return "red";
 }
 
+/**
+ * Builds a 100% Free-tier-compliant pass payload for Apple Wallet and Google Wallet.
+ * Features a visual emoji stamp progress bar, header counter, and clean 2-column secondary fields.
+ */
 export function buildBaselineWalletPassPayload(state: WalletPassState): Record<string, unknown> {
   const isPoints = state.programType === "points";
   const isCoupon = state.programType === "coupon_morph" && !state.morphed;
-  const label = isPoints ? "POINTS" : isCoupon ? "OFFER" : "STAMPS";
-  const value = isPoints
-    ? String(state.points)
-    : isCoupon
-      ? state.offer
-      : `${state.stamps}/${state.targetStamps}`;
+  const target = Math.max(1, state.targetStamps || 8);
+  const stamps = Math.max(0, state.stamps || 0);
+  const emoji = iconToEmoji(state.stampIcon);
+  const remainingCount = Math.max(0, target - stamps);
 
-  const changeMessage = isPoints
-    ? "You now have %@ points"
-    : isCoupon
-      ? "Your offer is now %@"
-      : "You now have %@ stamps";
+  const colorPreset = state.colorPreset || resolveColorPreset(state.brandColor, state.accentColor);
 
-  const payload: Record<string, unknown> = {
-    barcodeValue: state.serial,
-    barcodeFormat: "QR",
-    logoText: state.businessName,
-    description: `Loyalty card for ${state.businessName}`,
-    primaryFields: [
+  let headerFields: Array<{ key?: string; label: string; value: string; changeMessage?: string }>;
+  let primaryFields: Array<{ key?: string; label: string; value: string; changeMessage?: string }>;
+  let secondaryFields: Array<{
+    key?: string;
+    label: string;
+    value: string;
+    changeMessage?: string;
+  }>;
+
+  if (isPoints) {
+    headerFields = [
       {
-        label,
-        value,
-        changeMessage,
+        key: "points_header",
+        label: "POINTS",
+        value: String(state.points),
+        changeMessage: "You now have %@ points",
       },
-    ],
-    backFields: [
+    ];
+    primaryFields = [
       {
-        label: "NOTIFICATIONS",
-        value: state.notification ?? " ",
-        changeMessage: "%@",
+        key: "points_primary",
+        label: "POINTS BALANCE",
+        value: `${state.points} PTS`,
+        changeMessage: "Your balance is now %@",
       },
-    ],
-    colorPreset: resolveColorPreset(state.brandColor, state.accentColor),
-  };
-
-  if (state.offer) {
-    payload["secondaryFields"] = [
+    ];
+    secondaryFields = [
       {
-        label: isCoupon ? "DETAILS" : "REWARD",
-        value: state.offer,
+        key: "reward",
+        label: "REWARD",
+        value: state.offer || "Points Reward",
+      },
+    ];
+  } else if (isCoupon) {
+    headerFields = [
+      {
+        key: "offer_header",
+        label: "OFFER",
+        value: "WELCOME",
+        changeMessage: "Your offer is %@",
+      },
+    ];
+    primaryFields = [
+      {
+        key: "offer_primary",
+        label: "OFFER",
+        value: state.offer || "Special Offer",
+      },
+    ];
+    secondaryFields = [
+      {
+        key: "details",
+        label: "DETAILS",
+        value: "Scan at counter to redeem & unlock stamp card",
+      },
+    ];
+  } else {
+    // Stamp card (or morphed coupon)
+    headerFields = [
+      {
+        key: "stamps_header",
+        label: "STAMPS",
+        value: `${stamps}/${target}`,
+        changeMessage: "You now have %@ stamps",
+      },
+    ];
+
+    let progressValue: string;
+    if (stamps >= target) {
+      progressValue = "🎁 REWARD UNLOCKED!";
+    } else {
+      const earned = Array(stamps).fill(emoji);
+      const remaining = Array(remainingCount).fill("⚪");
+      progressValue = [...earned, ...remaining].join(" ");
+    }
+
+    primaryFields = [
+      {
+        key: "stamps_progress",
+        label: "STAMP PROGRESS",
+        value: progressValue,
+        changeMessage: "You now have %@ stamps",
+      },
+    ];
+
+    secondaryFields = [
+      {
+        key: "remaining",
+        label: "REMAINING",
+        value: `${remainingCount} left`,
+      },
+      {
+        key: "reward",
+        label: "REWARD",
+        value: state.offer || "Special Reward",
       },
     ];
   }
 
-  return payload;
+  const backFields = [
+    {
+      label: "NOTIFICATIONS",
+      value: state.notification ?? " ",
+      changeMessage: "%@",
+    },
+  ];
+
+  return {
+    barcodeValue: state.serial,
+    barcodeFormat: "QR",
+    logoText: state.businessName,
+    description: `Loyalty card for ${state.businessName}`,
+    headerFields,
+    primaryFields,
+    secondaryFields,
+    backFields,
+    colorPreset,
+  };
 }
 
-export function buildWalletPassPayload(state: WalletPassState) {
+/**
+ * Builds the pass payload.
+ * When tierMode is 'free' or when no visual strip is available, uses the enhanced baseline Free layout.
+ * When tierMode is 'pro' with a stripURL/stripDataUri, builds the retina storeCard pass.
+ */
+export function buildWalletPassPayload(state: WalletPassState): Record<string, unknown> {
+  if (state.tierMode === "free") {
+    return buildBaselineWalletPassPayload(state);
+  }
+
   const isPoints = state.programType === "points";
   const isCoupon = state.programType === "coupon_morph" && !state.morphed;
   const label = isPoints ? "POINTS" : isCoupon ? "OFFER" : "STAMPS";
@@ -151,7 +255,6 @@ export function buildWalletPassPayload(state: WalletPassState) {
     },
   ];
 
-  // Base payload
   const payload: Record<string, unknown> = {
     barcodeValue: state.serial,
     barcodeFormat: "QR",
@@ -159,15 +262,13 @@ export function buildWalletPassPayload(state: WalletPassState) {
     description: `Loyalty card for ${state.businessName}`,
     headerFields,
     backFields,
+    colorPreset: state.colorPreset || resolveColorPreset(state.brandColor, state.accentColor),
   };
 
   if (secondaryFields.length > 0) {
     payload["secondaryFields"] = secondaryFields;
   }
 
-  // When a visual strip is provided, Apple Wallet uses the storeCard layout.
-  // In storeCard passes, Apple Wallet renders the strip image across the card.
-  // We keep primaryFields when stripDataUri is absent so generic layout passes have a prominent value.
   const effectiveStrip = state.stripUrl || state.stripDataUri;
   if (effectiveStrip) {
     payload["stripURL"] = effectiveStrip;
@@ -181,11 +282,9 @@ export function buildWalletPassPayload(state: WalletPassState) {
     ];
   }
 
-  // Visual theming: Custom brand hex or fallback preset
   if (state.brandColor && /^#[0-9a-fA-F]{6}$/.test(state.brandColor)) {
     payload["color"] = state.brandColor;
   }
-  payload["colorPreset"] = resolveColorPreset(state.brandColor, state.accentColor);
 
   if (state.logoUrl) {
     payload["logoURL"] = state.logoUrl;

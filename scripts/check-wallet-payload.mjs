@@ -5,6 +5,11 @@ import {
   buildWalletPassPayload,
   resolveColorPreset,
 } from "../src/lib/wallet-payload.ts";
+import {
+  iconToEmoji,
+  parsePassTemplateMeta,
+  serializePassTemplateMeta,
+} from "../src/lib/wallet-tier.ts";
 
 const payload = buildWalletPassPayload({
   serial: "pass-1",
@@ -60,7 +65,7 @@ const points = buildWalletPassPayload({
 assert.equal(points.primaryFields[0].label, "POINTS");
 assert.equal(points.primaryFields[0].value, "150");
 
-// Assert visual strip & template branding (Apple Wallet storeCard style)
+// Assert visual strip & template branding (Apple Wallet storeCard style in Pro mode)
 const stripPass = buildWalletPassPayload({
   serial: "strip-pass-1",
   businessName: "Specialty Roaster",
@@ -111,7 +116,7 @@ assert.equal(resolveColorPreset("#d97706"), "orange");
 assert.equal(resolveColorPreset("#7c3aed"), "purple");
 assert.equal(resolveColorPreset(null, null), "dark");
 
-// Assert baseline fallback payload has 100% Free-tier compatibility
+// Assert baseline fallback payload has 100% Free-tier compatibility with Emoji Progress Bar
 const baseline = buildBaselineWalletPassPayload({
   serial: "free-pass-1",
   businessName: "Free Tier Business",
@@ -123,6 +128,7 @@ const baseline = buildBaselineWalletPassPayload({
   targetStamps: 6,
   brandColor: "#121214",
   accentColor: "#10b981",
+  stampIcon: "🍔",
   stripUrl: "https://example.com/strip.png",
   stripDataUri: "data:image/png;base64,...",
   logoUrl: "https://example.com/logo.png",
@@ -138,10 +144,45 @@ assert.equal(baseline.barcodeValue, "free-pass-1");
 assert.equal(baseline.barcodeFormat, "QR");
 assert.equal(baseline.logoText, "Free Tier Business");
 assert.equal(baseline.colorPreset, "dark");
-assert.equal(baseline.primaryFields[0].label, "STAMPS");
-assert.equal(baseline.primaryFields[0].value, "2/6");
-assert.equal(baseline.secondaryFields[0].label, "REWARD");
-assert.equal(baseline.secondaryFields[0].value, "Buy 5 Get 1");
+assert.equal(baseline.headerFields[0].label, "STAMPS");
+assert.equal(baseline.headerFields[0].value, "2/6");
+assert.equal(baseline.primaryFields[0].label, "STAMP PROGRESS");
+assert.equal(baseline.primaryFields[0].value, "🍔 🍔 ⚪ ⚪ ⚪ ⚪");
+assert.equal(baseline.secondaryFields[0].label, "REMAINING");
+assert.equal(baseline.secondaryFields[0].value, "4 left");
+assert.equal(baseline.secondaryFields[1].label, "REWARD");
+assert.equal(baseline.secondaryFields[1].value, "Buy 5 Get 1");
+
+// Reward unlocked baseline state
+const unlockedBaseline = buildBaselineWalletPassPayload({
+  serial: "free-pass-unlocked",
+  businessName: "Free Tier Business",
+  offer: "Free Pizza",
+  programType: "stamp",
+  stamps: 6,
+  points: 0,
+  morphed: false,
+  targetStamps: 6,
+});
+assert.equal(unlockedBaseline.primaryFields[0].value, "🎁 REWARD UNLOCKED!");
+assert.equal(unlockedBaseline.secondaryFields[0].value, "0 left");
+
+// Assert cross-device metadata encoding and decoding
+const serializedMeta = serializePassTemplateMeta({
+  baseId: "burger",
+  stampIcon: "🍔",
+  stripStyle: "pizzatown",
+  colorPreset: "red",
+  tierMode: "free",
+});
+assert.equal(serializedMeta, "burger__icon-burger__style-pizzatown__preset-red__tier-free");
+const parsedMeta = parsePassTemplateMeta(serializedMeta);
+assert.equal(parsedMeta.baseId, "burger");
+assert.equal(parsedMeta.stampIcon, "burger");
+assert.equal(iconToEmoji(parsedMeta.stampIcon), "🍔");
+assert.equal(parsedMeta.stripStyle, "pizzatown");
+assert.equal(parsedMeta.colorPreset, "red");
+assert.equal(parsedMeta.tierMode, "free");
 
 const walletSource = readFileSync(
   new URL("../src/lib/wallet.functions.ts", import.meta.url),
@@ -166,3 +207,5 @@ assert.ok(
   scanSource.includes("Action recorded, but wallet sync is unavailable"),
   "Scan flow must warn when a recorded action fails wallet sync",
 );
+
+console.log("All wallet payload and metadata tests passed successfully!");

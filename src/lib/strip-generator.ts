@@ -1,11 +1,14 @@
 import { PNG } from "pngjs";
 
+export type StripStyle = "pizzatown" | "nails_white" | "linear_dark";
+
 export interface StripGeneratorOptions {
   targetStamps: number;
   stamps: number;
   brandColor?: string | null | undefined;
   accentColor?: string | null | undefined;
   stampIcon?: string | null | undefined;
+  stripStyle?: StripStyle | string | null | undefined;
 }
 
 interface RGBA {
@@ -459,6 +462,11 @@ export function generateStampStripPng(options: StripGeneratorOptions): Buffer {
   const contrastHex = autoContrast(accentHex);
   const contrastRgba = parseHex(contrastHex, "#FFFFFF");
 
+  const style: StripStyle =
+    options.stripStyle === "nails_white" || options.stripStyle === "linear_dark"
+      ? options.stripStyle
+      : "pizzatown";
+
   // 1. Fill base canvas with brandColor
   for (let i = 0; i < width * height * 4; i += 4) {
     png.data[i] = brandRgba.r;
@@ -467,18 +475,47 @@ export function generateStampStripPng(options: StripGeneratorOptions): Buffer {
     png.data[i + 3] = 255;
   }
 
-  // 2. Draw card container surface
-  drawRoundedRect(
-    png,
-    36,
-    22,
-    width - 37,
-    height - 23,
-    24,
-    { r: 24, g: 24, b: 27, a: 220 }, // #18181b elevated card surface
-    { r: 255, g: 255, b: 255, a: 26 }, // subtle border rgba(255,255,255,0.1)
-    1.5,
-  );
+  // 2. Draw card container surface per style
+  if (style === "nails_white") {
+    // Nails White Card: Crisp white rounded card container
+    drawRoundedRect(
+      png,
+      32,
+      20,
+      width - 33,
+      height - 21,
+      26,
+      { r: 255, g: 255, b: 255, a: 255 },
+      null,
+      0,
+    );
+  } else if (style === "linear_dark") {
+    // Linear Dark: Elevated dark charcoal card over brand background
+    drawRoundedRect(
+      png,
+      36,
+      22,
+      width - 37,
+      height - 23,
+      24,
+      { r: 24, g: 24, b: 27, a: 220 },
+      { r: 255, g: 255, b: 255, a: 26 },
+      1.5,
+    );
+  } else {
+    // Pizzatown: Full-bleed brand background with subtle inner boundary
+    drawRoundedRect(
+      png,
+      30,
+      18,
+      width - 31,
+      height - 19,
+      24,
+      null,
+      { r: 255, g: 255, b: 255, a: 20 },
+      1.5,
+    );
+  }
 
   const target = Math.max(3, Math.min(options.targetStamps || 8, 12));
   const currentStamps = Math.max(0, options.stamps || 0);
@@ -546,56 +583,98 @@ export function generateStampStripPng(options: StripGeneratorOptions): Buffer {
     }
   }
 
-  // 4. Render slots
+  // 4. Render slots per chosen style
   for (const slot of slots) {
     const isStamped = slot.index < currentStamps;
     const isFinalRewardSlot = slot.index === target - 1;
+    const pat = isFinalRewardSlot ? giftPattern : iconPattern;
+    const iconScale = Math.round((slot.radius * 2 * 0.44) / 20) || 2;
 
-    if (isStamped) {
-      // Completed stamp: filled with accentColor
-      drawCircle(
-        png,
-        slot.cx,
-        slot.cy,
-        slot.radius,
-        accentRgba,
-        { r: 255, g: 255, b: 255, a: 80 },
-        1.5,
-      );
-
-      // Icon inside: final reward slot gets gift, others get chosen template icon
-      const pat = isFinalRewardSlot ? giftPattern : iconPattern;
-      const iconScale = Math.round((slot.radius * 2 * 0.44) / 20) || 2;
-      drawBitmap(png, pat, slot.cx, slot.cy, iconScale, contrastRgba);
-    } else {
-      // Unclaimed stamp: subtle ring border and dark transparent center
-      drawCircle(
-        png,
-        slot.cx,
-        slot.cy,
-        slot.radius,
-        { r: 255, g: 255, b: 255, a: 12 },
-        { r: 255, g: 255, b: 255, a: 56 },
-        2.5,
-      );
-
-      if (isFinalRewardSlot) {
-        // Final reward slot shows subtle gift preview
-        const iconScale = Math.round((slot.radius * 2 * 0.42) / 20) || 2;
-        drawBitmap(png, giftPattern, slot.cx, slot.cy, iconScale, {
-          r: 255,
-          g: 255,
-          b: 255,
-          a: 90,
-        });
+    if (style === "pizzatown") {
+      // Pizzatown: High-contrast circular badges.
+      // Earned: Crisp white circle with saturated icon inside.
+      // Remaining: Deep dark circle with muted icon visible in every slot.
+      if (isStamped) {
+        drawCircle(png, slot.cx, slot.cy, slot.radius, { r: 255, g: 255, b: 255, a: 255 }, null, 0);
+        drawBitmap(png, pat, slot.cx, slot.cy, iconScale, accentRgba);
       } else {
-        // Stamp number (1, 2, 3...)
-        drawNumber(png, slot.index + 1, slot.cx, slot.cy, 3, {
-          r: 255,
-          g: 255,
-          b: 255,
-          a: 95,
-        });
+        drawCircle(
+          png,
+          slot.cx,
+          slot.cy,
+          slot.radius,
+          { r: 17, g: 17, b: 19, a: 240 },
+          { r: 255, g: 255, b: 255, a: 40 },
+          1.5,
+        );
+        drawBitmap(
+          png,
+          pat,
+          slot.cx,
+          slot.cy,
+          iconScale,
+          isFinalRewardSlot ? { r: 255, g: 255, b: 255, a: 95 } : { r: 255, g: 255, b: 255, a: 70 },
+        );
+      }
+    } else if (style === "nails_white") {
+      // Nails White Card:
+      // Earned: Filled with vibrant accent color, white icon inside.
+      // Remaining: Light grey badge with bold charcoal icon inside.
+      if (isStamped) {
+        drawCircle(png, slot.cx, slot.cy, slot.radius, accentRgba, null, 0);
+        drawBitmap(png, pat, slot.cx, slot.cy, iconScale, { r: 255, g: 255, b: 255, a: 255 });
+      } else {
+        drawCircle(
+          png,
+          slot.cx,
+          slot.cy,
+          slot.radius,
+          { r: 243, g: 244, b: 246, a: 255 },
+          { r: 229, g: 231, b: 235, a: 255 },
+          1.5,
+        );
+        drawBitmap(png, pat, slot.cx, slot.cy, iconScale, { r: 24, g: 24, b: 27, a: 200 });
+      }
+    } else {
+      // Linear Dark:
+      // Earned: Accent filled with subtle border.
+      // Remaining: Dark translucent center with subtle ring, stamp number inside.
+      if (isStamped) {
+        drawCircle(
+          png,
+          slot.cx,
+          slot.cy,
+          slot.radius,
+          accentRgba,
+          { r: 255, g: 255, b: 255, a: 80 },
+          1.5,
+        );
+        drawBitmap(png, pat, slot.cx, slot.cy, iconScale, contrastRgba);
+      } else {
+        drawCircle(
+          png,
+          slot.cx,
+          slot.cy,
+          slot.radius,
+          { r: 255, g: 255, b: 255, a: 12 },
+          { r: 255, g: 255, b: 255, a: 56 },
+          2.5,
+        );
+        if (isFinalRewardSlot) {
+          drawBitmap(png, giftPattern, slot.cx, slot.cy, iconScale, {
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 90,
+          });
+        } else {
+          drawNumber(png, slot.index + 1, slot.cx, slot.cy, 3, {
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 95,
+          });
+        }
       }
     }
   }

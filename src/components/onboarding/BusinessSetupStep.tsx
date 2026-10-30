@@ -193,7 +193,7 @@ export function BusinessSetupStep({ onSuccess }: BusinessSetupStepProps) {
                 className="inline-flex items-center gap-1.5 text-xs text-emerald-400 hover:text-emerald-300 transition-colors py-1"
               >
                 <Plus className="size-3.5" />
-                <span>+ إضافة الاسم بالإنجليزي (اختياري)</span>
+                <span>إضافة الاسم بالإنجليزي (اختياري)</span>
               </button>
             ) : (
               <div className="space-y-1.5 pt-1">
@@ -249,7 +249,7 @@ export function BusinessSetupStep({ onSuccess }: BusinessSetupStepProps) {
                 className="inline-flex items-center gap-1.5 text-xs text-emerald-400 hover:text-emerald-300 transition-colors py-1"
               >
                 <Plus className="size-3.5" />
-                <span>+ Add Arabic name (optional)</span>
+                <span>Add Arabic name (optional)</span>
               </button>
             ) : (
               <div className="space-y-1.5 pt-1">

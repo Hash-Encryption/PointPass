@@ -223,43 +223,7 @@ function OnboardingRoute() {
   }
 
   return (
-    <OnboardingLayout
-      currentStep={currentStep}
-      title={
-        currentStep === "business"
-          ? ar
-            ? "الخطوة ١: هوية وبيانات المتجر"
-            : "Step 1: Store Identity"
-          : currentStep === "loyalty"
-            ? ar
-              ? "الخطوة ٢: استوديو تصميم البطاقة"
-              : "Step 2: Card Studio"
-            : currentStep === "reward"
-              ? ar
-                ? "الخطوة ٣: شروط ومكافأة الولاء"
-                : "Step 3: Reward Rules"
-              : ar
-                ? "الخطوة ٤: إطلاق برنامج الولاء ورمز QR"
-                : "Step 4: Launch & Counter QR"
-      }
-      subtitle={
-        currentStep === "business"
-          ? ar
-            ? "أدخل اسم متجرك لإنشاء بطاقة Apple Wallet الخاصة بك."
-            : "Enter your business details to create your Apple Wallet pass."
-          : currentStep === "loyalty"
-            ? ar
-              ? "اختر النموذج المناسب لنشاطك وخصص الألوان وعدد الأختام."
-              : "Choose an industry template or customize your card colors."
-            : currentStep === "reward"
-              ? ar
-                ? "حدد الهدية التي تظهر لعملائك بمجرد جمع الأختام."
-                : "Specify the gift customers earn upon collecting stamps."
-              : ar
-                ? "اطبع الرمز وضعه على الكاونتر للبدء باستقبال العملاء."
-                : "Place your QR code on the counter to begin enrolling customers."
-      }
-    >
+    <OnboardingLayout currentStep={currentStep}>
       {/* Step 1: Business Identity */}
       {currentStep === "business" && (
         <BusinessSetupStep

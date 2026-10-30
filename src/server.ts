@@ -56,6 +56,8 @@ export default {
         const brandColor = params.get("brand") || undefined;
         const accentColor = params.get("accent") || undefined;
         const stampIcon = params.get("icon") || undefined;
+        const stripStyle =
+          (params.get("style") as "pizzatown" | "nails_white" | "linear_dark") || undefined;
 
         const pngBuf = generateStampStripPng({
           targetStamps,
@@ -63,6 +65,7 @@ export default {
           brandColor,
           accentColor,
           stampIcon,
+          stripStyle,
         });
 
         return new Response(new Uint8Array(pngBuf), {

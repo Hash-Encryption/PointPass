@@ -1,15 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { toast } from "sonner";
-import {
-  Loader2,
-  ArrowLeft,
-  ArrowRight,
-  Palette,
-  Sliders,
-  ChevronDown,
-  ChevronUp,
-  Sparkles,
-} from "lucide-react";
+import { Loader2, ArrowLeft, ArrowRight, Palette, Sparkles, ShieldCheck, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -18,6 +9,15 @@ import { type ProgramType } from "@/constants/defaultTemplates";
 import { PassPreview } from "@/components/PassPreview";
 import { saveOnboardingStepFn } from "@/lib/onboarding.functions";
 import { supabase } from "@/lib/supabase";
+import {
+  getStoredWalletTier,
+  serializePassTemplateMeta,
+  WALLET_COLOR_PRESETS,
+  STRIP_STYLES,
+  type StripStyle,
+  type WalletColorPreset,
+  type WalletTierMode,
+} from "@/lib/wallet-tier";
 
 export interface CuratedTemplate {
   id: string;
@@ -27,6 +27,7 @@ export interface CuratedTemplate {
   pillIcon: string;
   background: string;
   accent: string;
+  colorPreset: WalletColorPreset;
   targetStamps: number;
   rewardAr: string;
   rewardEn: string;
@@ -41,6 +42,7 @@ export const CURATED_TEMPLATES: CuratedTemplate[] = [
     pillIcon: "🎨",
     background: "#121214",
     accent: "#10B981",
+    colorPreset: "dark",
     targetStamps: 8,
     rewardAr: "مكافأة خاصة بعد 8 زيارات 🎁",
     rewardEn: "Special reward after 8 visits 🎁",
@@ -53,6 +55,7 @@ export const CURATED_TEMPLATES: CuratedTemplate[] = [
     pillIcon: "☕",
     background: "#1A1412",
     accent: "#D97706",
+    colorPreset: "orange",
     targetStamps: 7,
     rewardAr: "قهوة مجانية من اختيارك ☕",
     rewardEn: "Free coffee of your choice ☕",
@@ -65,6 +68,7 @@ export const CURATED_TEMPLATES: CuratedTemplate[] = [
     pillIcon: "🍔",
     background: "#18181B",
     accent: "#EF4444",
+    colorPreset: "red",
     targetStamps: 5,
     rewardAr: "وجبة مجانية من اختيارك 🍔",
     rewardEn: "Free meal of your choice 🍔",
@@ -77,6 +81,7 @@ export const CURATED_TEMPLATES: CuratedTemplate[] = [
     pillIcon: "🥐",
     background: "#26201E",
     accent: "#F59E0B",
+    colorPreset: "orange",
     targetStamps: 6,
     rewardAr: "قطعة حلى مجانية 🥐",
     rewardEn: "Free pastry of your choice 🥐",
@@ -89,6 +94,7 @@ export const CURATED_TEMPLATES: CuratedTemplate[] = [
     pillIcon: "✂️",
     background: "#0F172A",
     accent: "#8B5CF6",
+    colorPreset: "purple",
     targetStamps: 5,
     rewardAr: "جلسة عناية أو حلاقة مجانية ✂️",
     rewardEn: "Free grooming or haircut session ✂️",
@@ -101,29 +107,11 @@ export const CURATED_TEMPLATES: CuratedTemplate[] = [
     pillIcon: "🚗",
     background: "#082F49",
     accent: "#06B6D4",
+    colorPreset: "blue",
     targetStamps: 5,
     rewardAr: "غسيل سيارة مجاني شامل 🚗",
     rewardEn: "Free full car wash 🚗",
   },
-];
-
-const BACKGROUND_CHIPS = [
-  { hex: "#121214", name: "Obsidian" },
-  { hex: "#1A1412", name: "Dark Roast" },
-  { hex: "#18181B", name: "Charcoal" },
-  { hex: "#0F172A", name: "Deep Slate" },
-  { hex: "#082F49", name: "Deep Ocean" },
-  { hex: "#26201E", name: "Mocha" },
-];
-
-const ACCENT_CHIPS = [
-  { hex: "#10B981", name: "Emerald" },
-  { hex: "#D97706", name: "Warm Gold" },
-  { hex: "#EF4444", name: "Red Flame" },
-  { hex: "#F59E0B", name: "Honey" },
-  { hex: "#8B5CF6", name: "Royal Violet" },
-  { hex: "#06B6D4", name: "Electric Cyan" },
-  { hex: "#EC4899", name: "Hot Pink" },
 ];
 
 const STAMP_COUNTS = [5, 6, 7, 8, 10];
@@ -162,25 +150,36 @@ export function LoyaltySetupStep({
   onSuccess,
   onBack,
 }: LoyaltySetupStepProps) {
-  const { locale, t } = useLocale();
+  const { locale } = useLocale();
   const ar = locale === "ar";
 
+  const [tierMode, setTierMode] = useState<WalletTierMode>(getStoredWalletTier);
   const [activeTemplateId, setActiveTemplateId] = useState<string>("custom");
-  const [program, setProgram] = useState<ProgramType>(initialProgram);
+  const [program] = useState<ProgramType>(initialProgram);
   const [brandColor, setBrandColor] = useState(initialBrandColor);
   const [accentColor, setAccentColor] = useState(initialAccentColor);
+  const [colorPreset, setColorPreset] = useState<WalletColorPreset>("dark");
+  const [stripStyle, setStripStyle] = useState<StripStyle>("pizzatown");
   const [targetStamps, setTargetStamps] = useState(initialTargetStamps);
   const [stampIcon, setStampIcon] = useState(initialStampIcon);
   const [suggestedRewardAr, setSuggestedRewardAr] = useState("مكافأة خاصة بعد 8 زيارات 🎁");
   const [suggestedRewardEn, setSuggestedRewardEn] = useState("Special reward after 8 visits 🎁");
-
-  const [showAdvanced, setShowAdvanced] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    function onTierChange(e: Event) {
+      const custom = e as CustomEvent<WalletTierMode>;
+      if (custom.detail) setTierMode(custom.detail);
+    }
+    window.addEventListener("pointpass:tier-change", onTierChange);
+    return () => window.removeEventListener("pointpass:tier-change", onTierChange);
+  }, []);
 
   function applyTemplate(tpl: CuratedTemplate) {
     setActiveTemplateId(tpl.id);
     setBrandColor(tpl.background);
     setAccentColor(tpl.accent);
+    setColorPreset(tpl.colorPreset);
     setTargetStamps(tpl.targetStamps);
     setStampIcon(tpl.icon);
     setSuggestedRewardAr(tpl.rewardAr);
@@ -201,23 +200,43 @@ export function LoyaltySetupStep({
         );
       }
 
+      const effectiveBrandColor =
+        tierMode === "free" ? WALLET_COLOR_PRESETS[colorPreset].hex : brandColor;
+      const effectiveAccentColor =
+        tierMode === "free" ? WALLET_COLOR_PRESETS[colorPreset].accent : accentColor;
+
       await saveOnboardingStepFn({
         data: {
           accessToken: session.access_token,
           businessId,
           step: "loyalty",
           programType: program,
-          brandColor,
-          accentColor,
+          brandColor: effectiveBrandColor,
+          accentColor: effectiveAccentColor,
           targetStamps,
         },
       });
 
+      // Cross-device template metadata persistence inside template_id
+      const metaString = serializePassTemplateMeta({
+        baseId: activeTemplateId,
+        stampIcon,
+        stripStyle,
+        colorPreset,
+        tierMode,
+      });
+
+      try {
+        await supabase.from("businesses").update({ template_id: metaString }).eq("id", businessId);
+      } catch (err) {
+        console.warn("Template meta persistence note:", err);
+      }
+
       toast.success(ar ? "تم حفظ تصميم البطاقة بنجاح!" : "Pass design saved!");
       onSuccess({
         program,
-        brandColor,
-        accentColor,
+        brandColor: effectiveBrandColor,
+        accentColor: effectiveAccentColor,
         targetStamps,
         stampIcon,
         suggestedRewardAr,
@@ -230,28 +249,48 @@ export function LoyaltySetupStep({
     }
   }
 
+  const isFree = tierMode === "free";
+  const effectiveBg = isFree ? WALLET_COLOR_PRESETS[colorPreset].hex : brandColor;
+  const effectiveAccent = isFree ? WALLET_COLOR_PRESETS[colorPreset].accent : accentColor;
   const ArrowIcon = ar ? ArrowLeft : ArrowRight;
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center gap-3 pb-3 border-b border-zinc-800">
-        <div className="size-11 rounded-2xl bg-zinc-800/80 border border-zinc-700/80 text-emerald-400 flex items-center justify-center shrink-0">
-          <Palette className="size-5.5" />
+      {/* Unified Card Header */}
+      <div className="flex items-center justify-between gap-3 pb-3 border-b border-zinc-800">
+        <div className="flex items-center gap-3">
+          <div className="size-11 rounded-2xl bg-zinc-800/80 border border-zinc-700/80 text-emerald-400 flex items-center justify-center shrink-0">
+            <Palette className="size-5.5" />
+          </div>
+          <div>
+            <h2 className="text-lg font-bold text-white tracking-tight">
+              {ar ? "استوديو تصميم البطاقة" : "Card Design Studio"}
+            </h2>
+            <p className="text-xs text-zinc-400">
+              {ar
+                ? "اختر قالباً جاهزاً أو خصص ألوان البطاقة وعدد الأختام بضغطة واحدة."
+                : "Choose a curated template or customize your card colors & stamps."}
+            </p>
+          </div>
         </div>
-        <div>
-          <h2 className="text-lg font-bold text-white tracking-tight">
-            {ar ? "استوديو تصميم البطاقة" : "Card Design Studio"}
-          </h2>
-          <p className="text-xs text-zinc-400">
-            {ar
-              ? "اختر قالباً جاهزاً أو خصص ألوان البطاقة وعدد الأختام بضغطة واحدة."
-              : "Choose a curated template or customize your card colors & stamps."}
-          </p>
+
+        {/* Active Studio Mode Pill */}
+        <div className="shrink-0">
+          {isFree ? (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 shadow-xs">
+              <ShieldCheck className="size-3" />
+              <span>{ar ? "وضع المجاني الفوري" : "Free Mode"}</span>
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20 shadow-xs">
+              <Zap className="size-3" />
+              <span>{ar ? "وضع برو (Retina Strip)" : "Pro Studio"}</span>
+            </span>
+          )}
         </div>
       </div>
 
-      {/* MOBILE ONLY: Sticky Live Pass Preview anchored at the top */}
+      {/* MOBILE ONLY: Sticky Live Pass Preview */}
       <div className="lg:hidden sticky top-14 z-20 bg-zinc-950/95 backdrop-blur-md pt-2 pb-4 -mx-5 px-5 border-b border-zinc-800/80 shadow-xl">
         <div className="max-w-xs mx-auto">
           <PassPreview
@@ -262,8 +301,8 @@ export function LoyaltySetupStep({
               businessName: businessNameAr,
               businessNameEn: businessNameEn,
               logoUrl: null,
-              background: brandColor,
-              accent: accentColor,
+              background: effectiveBg,
+              accent: effectiveAccent,
               headline: ar ? suggestedRewardAr : suggestedRewardEn,
               headlineEn: suggestedRewardEn,
               subline: ar ? "شكراً لولائك" : "Thanks for your loyalty",
@@ -274,17 +313,15 @@ export function LoyaltySetupStep({
               pointsPerReward: 100,
               progress: 2,
               stampIcon,
+              stripStyle,
+              tierMode,
+              colorPreset,
             }}
           />
-          <p className="text-center text-[10px] text-zinc-500 mt-1.5">
-            {ar
-              ? "اضغط على الأختام في البطاقة لتعديل العدد مباشرة"
-              : "Tap stamps on the card to change target count"}
-          </p>
         </div>
       </div>
 
-      {/* Curated Templates Bar */}
+      {/* 1. Curated Industry Templates */}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <Label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
@@ -292,17 +329,13 @@ export function LoyaltySetupStep({
             <span>{ar ? "نماذج جاهزة حسب نشاطك" : "Curated Templates by Industry"}</span>
           </Label>
           <span className="text-[11px] text-zinc-500 font-mono">
-            {activeTemplateId === "custom"
-              ? ar
-                ? "تخصيص حر"
-                : "Custom"
-              : CURATED_TEMPLATES.find((t) => t.id === activeTemplateId)?.[
-                  ar ? "labelAr" : "labelEn"
-                ]}
+            {CURATED_TEMPLATES.find((t) => t.id === activeTemplateId)?.[
+              ar ? "labelAr" : "labelEn"
+            ] || (ar ? "مخصص" : "Custom")}
           </span>
         </div>
 
-        <div className="flex gap-2 overflow-x-auto pb-2 pt-1 no-scrollbar sm:grid sm:grid-cols-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
           {CURATED_TEMPLATES.map((tpl) => {
             const isActive = activeTemplateId === tpl.id;
             return (
@@ -310,7 +343,7 @@ export function LoyaltySetupStep({
                 type="button"
                 key={tpl.id}
                 onClick={() => applyTemplate(tpl)}
-                className={`flex items-center gap-2.5 rounded-2xl border p-2.5 sm:p-3 text-start transition-all shrink-0 sm:shrink ${
+                className={`flex items-center gap-2.5 rounded-2xl border p-2.5 sm:p-3 text-start transition-all ${
                   isActive
                     ? "border-emerald-500/50 bg-emerald-500/10 shadow-[0_0_15px_rgba(16,185,129,0.15)] ring-1 ring-emerald-500/30"
                     : "border-zinc-800 bg-zinc-950/60 hover:border-zinc-700 hover:bg-zinc-900/60"
@@ -319,7 +352,7 @@ export function LoyaltySetupStep({
                 <span className="grid size-9 place-items-center rounded-xl bg-zinc-900 border border-zinc-800 text-base shrink-0 shadow-xs">
                   {tpl.pillIcon}
                 </span>
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <div className="text-xs font-bold text-white truncate">
                     {ar ? tpl.labelAr : tpl.labelEn}
                   </div>
@@ -347,179 +380,199 @@ export function LoyaltySetupStep({
       <div className="grid gap-6 lg:grid-cols-12 items-start">
         {/* Editor Controls */}
         <div className="lg:col-span-7 space-y-5">
-          {/* Direct Tap Manipulation: Stamp Count */}
-          <div className="space-y-2">
-            <Label className="text-xs font-semibold text-zinc-300">
-              {ar ? "عدد الأختام المطلوبة للمكافأة" : "Target Stamps for Reward"}
-            </Label>
-            <div className="flex flex-wrap gap-2">
-              {STAMP_COUNTS.map((cnt) => (
-                <button
-                  type="button"
-                  key={cnt}
-                  onClick={() => setTargetStamps(cnt)}
-                  className={`size-10 rounded-xl font-bold text-xs transition-all flex items-center justify-center ${
-                    targetStamps === cnt
-                      ? "bg-emerald-500 text-zinc-950 shadow-[0_0_15px_rgba(16,185,129,0.3)] scale-105"
-                      : "bg-zinc-950 border border-zinc-800 text-zinc-300 hover:border-zinc-700 hover:text-white"
-                  }`}
-                >
-                  {cnt}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Direct Tap Manipulation: Stamp Icon */}
-          <div className="space-y-2">
-            <Label className="text-xs font-semibold text-zinc-300">
-              {ar ? "شكل الختم داخل البطاقة" : "Stamp Icon"}
-            </Label>
-            <div className="flex flex-wrap gap-2">
-              {STAMP_ICONS.map((ic) => (
-                <button
-                  type="button"
-                  key={ic}
-                  onClick={() => setStampIcon(ic)}
-                  className={`size-10 rounded-xl text-base transition-all flex items-center justify-center ${
-                    stampIcon === ic
-                      ? "bg-zinc-800 border-2 border-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.25)] scale-105"
-                      : "bg-zinc-950 border border-zinc-800 text-zinc-300 hover:border-zinc-700"
-                  }`}
-                >
-                  {ic}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Color Palettes Chips */}
-          <div className="space-y-3">
+          {/* 2. Compact 2-Column Row: Target Stamps + Stamp Icon */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 bg-zinc-950/80 p-3.5 rounded-2xl border border-zinc-800/90 shadow-sm">
+            {/* Target Stamps */}
             <div className="space-y-1.5">
               <Label className="text-xs font-semibold text-zinc-300">
-                {ar ? "لون خلفية البطاقة" : "Card Background Color"}
+                {ar ? "عدد الأختام المطلوبة" : "Target Stamps"}
               </Label>
-              <div className="flex flex-wrap gap-2">
-                {BACKGROUND_CHIPS.map((chip) => (
+              <div className="flex gap-1.5">
+                {STAMP_COUNTS.map((cnt) => (
                   <button
                     type="button"
-                    key={chip.hex}
-                    onClick={() => {
-                      setBrandColor(chip.hex);
-                      setActiveTemplateId("custom");
-                    }}
-                    title={chip.name}
-                    className={`flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs transition-all ${
-                      brandColor.toLowerCase() === chip.hex.toLowerCase()
-                        ? "border-emerald-500 bg-zinc-800 text-white ring-1 ring-emerald-500/40"
-                        : "border-zinc-800 bg-zinc-950/60 text-zinc-400 hover:border-zinc-700 hover:text-white"
+                    key={cnt}
+                    onClick={() => setTargetStamps(cnt)}
+                    className={`flex-1 h-9 rounded-xl font-bold text-xs transition-all flex items-center justify-center ${
+                      targetStamps === cnt
+                        ? "bg-emerald-500 text-zinc-950 shadow-[0_0_12px_rgba(16,185,129,0.3)] font-black scale-105"
+                        : "bg-zinc-900 border border-zinc-800 text-zinc-300 hover:border-zinc-700"
                     }`}
                   >
-                    <span
-                      className="size-3 rounded-full border border-white/20"
-                      style={{ backgroundColor: chip.hex }}
-                    />
-                    <span className="text-[11px] font-medium">{chip.name}</span>
+                    {cnt}
                   </button>
                 ))}
               </div>
             </div>
 
+            {/* Stamp Icon */}
             <div className="space-y-1.5">
               <Label className="text-xs font-semibold text-zinc-300">
-                {ar ? "لون الختم والتمييز (Accent)" : "Stamp Accent Color"}
+                {ar ? "رمز الختم" : "Stamp Icon"}
               </Label>
-              <div className="flex flex-wrap gap-2">
-                {ACCENT_CHIPS.map((chip) => (
+              <div className="flex gap-1.5 overflow-x-auto no-scrollbar py-0.5">
+                {STAMP_ICONS.map((ic) => (
                   <button
                     type="button"
-                    key={chip.hex}
-                    onClick={() => {
-                      setAccentColor(chip.hex);
-                      setActiveTemplateId("custom");
-                    }}
-                    title={chip.name}
-                    className={`flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs transition-all ${
-                      accentColor.toLowerCase() === chip.hex.toLowerCase()
-                        ? "border-emerald-500 bg-zinc-800 text-white ring-1 ring-emerald-500/40"
-                        : "border-zinc-800 bg-zinc-950/60 text-zinc-400 hover:border-zinc-700 hover:text-white"
+                    key={ic}
+                    onClick={() => setStampIcon(ic)}
+                    className={`size-9 rounded-xl text-base transition-all flex items-center justify-center shrink-0 ${
+                      stampIcon === ic
+                        ? "bg-zinc-800 border-2 border-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.25)] scale-105"
+                        : "bg-zinc-900 border border-zinc-800 text-zinc-300 hover:border-zinc-700"
                     }`}
                   >
-                    <span
-                      className="size-3 rounded-full border border-white/20"
-                      style={{ backgroundColor: chip.hex }}
-                    />
-                    <span className="text-[11px] font-medium">{chip.name}</span>
+                    {ic}
                   </button>
                 ))}
               </div>
             </div>
           </div>
 
-          {/* Progressive Disclosure: Advanced Options */}
-          <div className="pt-2">
-            <button
-              type="button"
-              onClick={() => setShowAdvanced(!showAdvanced)}
-              className="inline-flex items-center gap-1.5 text-xs text-zinc-400 hover:text-emerald-400 transition-colors"
-            >
-              <Sliders className="size-3.5" />
-              <span>
-                {ar ? "خيارات متقدمة وألوان مخصصة" : "Advanced Customization (Hex codes)"}
-              </span>
-              {showAdvanced ? (
-                <ChevronUp className="size-3.5" />
-              ) : (
-                <ChevronDown className="size-3.5" />
-              )}
-            </button>
+          {/* 3. Mode-Specific Styling Controls */}
+          {isFree ? (
+            /* FREE MODE: 6 Official Apple Wallet Color Presets */
+            <div className="space-y-3 bg-zinc-950/60 p-4 rounded-2xl border border-zinc-800/80">
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label className="text-xs font-semibold text-zinc-200">
+                    {ar
+                      ? "ألوان المحفظة الرسمية (Wallet Presets)"
+                      : "Official Wallet Color Presets"}
+                  </Label>
+                  <p className="text-[11px] text-zinc-400 mt-0.5">
+                    {ar
+                      ? "ألوان معتمدة وعالية التباين وتعمل 100% بدون أي قيود"
+                      : "Native high-contrast presets compatible with all wallet accounts"}
+                  </p>
+                </div>
+              </div>
 
-            {showAdvanced && (
-              <div className="mt-3 p-4 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-4">
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="space-y-1.5">
-                    <Label className="text-[11px] text-zinc-400">
-                      {ar ? "كود لون الخلفية (Hex)" : "Background Hex"}
-                    </Label>
-                    <div className="flex items-center gap-2">
-                      <Input
-                        type="color"
-                        value={brandColor}
-                        onChange={(e) => setBrandColor(e.target.value)}
-                        className="size-9 p-0.5 rounded-lg bg-zinc-900 border border-zinc-700 cursor-pointer"
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-1">
+                {(Object.keys(WALLET_COLOR_PRESETS) as WalletColorPreset[]).map((key) => {
+                  const preset = WALLET_COLOR_PRESETS[key];
+                  const isSelected = colorPreset === key;
+                  return (
+                    <button
+                      type="button"
+                      key={key}
+                      onClick={() => {
+                        setColorPreset(key);
+                        setActiveTemplateId("custom");
+                      }}
+                      className={`flex items-center gap-2.5 p-2.5 rounded-xl border text-start transition-all ${
+                        isSelected
+                          ? "border-emerald-500 bg-zinc-800 text-white ring-1 ring-emerald-500/40 shadow-xs"
+                          : "border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700 hover:text-white"
+                      }`}
+                    >
+                      <span
+                        className="size-4 rounded-full border border-white/20 shrink-0"
+                        style={{ backgroundColor: preset.hex }}
                       />
-                      <Input
-                        value={brandColor}
-                        onChange={(e) => setBrandColor(e.target.value)}
-                        dir="ltr"
-                        className="font-mono text-xs h-9 bg-zinc-900 border-zinc-800 text-white"
-                      />
-                    </div>
+                      <span className="text-xs font-medium truncate">
+                        {ar ? preset.nameAr : preset.nameEn}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="pt-2 border-t border-zinc-800/80 flex items-center justify-between text-[11px] text-zinc-500">
+                <span>{ar ? "وضع المجاني الفوري نشط" : "Free Tier Mode Active"}</span>
+                <span className="text-emerald-400 font-mono text-[10px]">
+                  {ar ? "التبديل إلى استوديو Pro من /admin" : "Switch to Pro Studio in /admin"}
+                </span>
+              </div>
+            </div>
+          ) : (
+            /* PRO MODE: Strip Layout Styles & Custom #hex Pickers */
+            <div className="space-y-4 bg-zinc-950/60 p-4 rounded-2xl border border-zinc-800/80">
+              {/* Strip Layout Style */}
+              <div className="space-y-2">
+                <Label className="text-xs font-semibold text-zinc-200">
+                  {ar ? "نمط شريط الأختام (1080x360 Retina Banner)" : "Strip Layout Style"}
+                </Label>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  {STRIP_STYLES.map((st) => {
+                    const isSelected = stripStyle === st.id;
+                    return (
+                      <button
+                        type="button"
+                        key={st.id}
+                        onClick={() => setStripStyle(st.id)}
+                        className={`p-3 rounded-xl border text-start transition-all ${
+                          isSelected
+                            ? "border-amber-500 bg-zinc-800 text-white ring-1 ring-amber-500/40 shadow-xs"
+                            : "border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700 hover:text-white"
+                        }`}
+                      >
+                        <p className="text-xs font-bold text-white">{ar ? st.nameAr : st.nameEn}</p>
+                        <p className="text-[10px] text-zinc-400 mt-1 line-clamp-2">
+                          {ar ? st.descriptionAr : st.descriptionEn}
+                        </p>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Custom #hex Colors */}
+              <div className="grid gap-3 sm:grid-cols-2 pt-2 border-t border-zinc-800">
+                <div className="space-y-1.5">
+                  <Label className="text-[11px] text-zinc-400">
+                    {ar ? "لون خلفية البطاقة (Brand Hex)" : "Brand Hex"}
+                  </Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="color"
+                      value={brandColor}
+                      onChange={(e) => {
+                        setBrandColor(e.target.value);
+                        setActiveTemplateId("custom");
+                      }}
+                      className="size-9 p-0.5 rounded-lg bg-zinc-900 border border-zinc-700 cursor-pointer"
+                    />
+                    <Input
+                      value={brandColor}
+                      onChange={(e) => {
+                        setBrandColor(e.target.value);
+                        setActiveTemplateId("custom");
+                      }}
+                      dir="ltr"
+                      className="font-mono text-xs h-9 bg-zinc-900 border-zinc-800 text-white"
+                    />
                   </div>
+                </div>
 
-                  <div className="space-y-1.5">
-                    <Label className="text-[11px] text-zinc-400">
-                      {ar ? "كود لون الختم (Hex)" : "Accent Hex"}
-                    </Label>
-                    <div className="flex items-center gap-2">
-                      <Input
-                        type="color"
-                        value={accentColor}
-                        onChange={(e) => setAccentColor(e.target.value)}
-                        className="size-9 p-0.5 rounded-lg bg-zinc-900 border border-zinc-700 cursor-pointer"
-                      />
-                      <Input
-                        value={accentColor}
-                        onChange={(e) => setAccentColor(e.target.value)}
-                        dir="ltr"
-                        className="font-mono text-xs h-9 bg-zinc-900 border-zinc-800 text-white"
-                      />
-                    </div>
+                <div className="space-y-1.5">
+                  <Label className="text-[11px] text-zinc-400">
+                    {ar ? "لون الختم والتمييز (Accent Hex)" : "Accent Hex"}
+                  </Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="color"
+                      value={accentColor}
+                      onChange={(e) => {
+                        setAccentColor(e.target.value);
+                        setActiveTemplateId("custom");
+                      }}
+                      className="size-9 p-0.5 rounded-lg bg-zinc-900 border border-zinc-700 cursor-pointer"
+                    />
+                    <Input
+                      value={accentColor}
+                      onChange={(e) => {
+                        setAccentColor(e.target.value);
+                        setActiveTemplateId("custom");
+                      }}
+                      dir="ltr"
+                      className="font-mono text-xs h-9 bg-zinc-900 border-zinc-800 text-white"
+                    />
                   </div>
                 </div>
               </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
 
         {/* Desktop Sticky Pass Preview */}
@@ -532,8 +585,8 @@ export function LoyaltySetupStep({
                 businessName: businessNameAr,
                 businessNameEn: businessNameEn,
                 logoUrl: null,
-                background: brandColor,
-                accent: accentColor,
+                background: effectiveBg,
+                accent: effectiveAccent,
                 headline: ar ? suggestedRewardAr : suggestedRewardEn,
                 headlineEn: suggestedRewardEn,
                 subline: ar ? "شكراً لولائك" : "Thanks for your loyalty",
@@ -544,6 +597,9 @@ export function LoyaltySetupStep({
                 pointsPerReward: 100,
                 progress: 2,
                 stampIcon,
+                stripStyle,
+                tierMode,
+                colorPreset,
               }}
             />
             <p className="text-center text-[10px] text-zinc-500">
