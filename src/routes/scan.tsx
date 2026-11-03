@@ -1,10 +1,31 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Camera, Coins, Gift, Lock, LogOut, Stamp, Store } from "lucide-react";
+import {
+  ArrowLeft,
+  Camera,
+  CameraOff,
+  CheckCircle2,
+  Coins,
+  Gift,
+  Globe,
+  KeyRound,
+  Lock,
+  LogOut,
+  Plus,
+  QrCode,
+  RefreshCw,
+  Search,
+  Sparkles,
+  Stamp,
+  Store,
+  User,
+  Zap,
+} from "lucide-react";
 import { useLocale } from "@/lib/i18n";
 import { supabase } from "@/lib/supabase";
-import { updateWalletPass } from "@/lib/wallet.functions";
+import { lookupCustomerPass, updateWalletPass } from "@/lib/wallet.functions";
+import { iconToEmoji, parsePassTemplateMeta, type PassTemplateMeta } from "@/lib/wallet-tier";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,14 +33,17 @@ import { Label } from "@/components/ui/label";
 export const Route = createFileRoute("/scan")({
   head: () => ({
     meta: [
-      { title: "شاشة الكاشير | Cashier Terminal — Wallet Loyalty" },
+      { title: "شاشة الكاشير | Mobile POS Terminal — PointPass" },
       {
         name: "description",
         content:
-          "PIN-protected cashier terminal to scan customer wallet passes, add stamps, log SAR spend and redeem rewards.",
+          "Fast, tactile dark-mode Cashier Scanner Terminal with live Apple Wallet OTA sync and instant stamp rewards.",
       },
-      { property: "og:title", content: "Cashier Terminal — Wallet Loyalty" },
-      { property: "og:description", content: "Scan, stamp and redeem loyalty passes in seconds." },
+      { property: "og:title", content: "Cashier POS Terminal — PointPass" },
+      {
+        property: "og:description",
+        content: "Scan, stamp and redeem loyalty passes in 2 seconds with live Apple Wallet sync.",
+      },
     ],
   }),
   component: CashierTerminal,
@@ -30,21 +54,169 @@ type BusinessInfo = {
   business_slug: string;
   name_ar: string;
   name_en: string;
-  branch_name_ar: string | undefined;
-  branch_name_en: string | undefined;
-  staff_name_ar: string | undefined;
-  staff_name_en: string | undefined;
+  branch_name_ar?: string | undefined;
+  branch_name_en?: string | undefined;
+  staff_name_ar?: string | undefined;
+  staff_name_en?: string | undefined;
+  template_id?: string | null | undefined;
+  brand_color?: string | null | undefined;
+  accent_color?: string | null | undefined;
+  offer_ar?: string | null | undefined;
+  offer_en?: string | null | undefined;
+  target_stamps?: number | undefined;
 };
 
-type UnlockResult = BusinessInfo & {
+type UnlockResult = {
+  business_id: string;
+  business_slug: string;
+  name_ar: string;
+  name_en: string;
+  branch_name_ar?: string | undefined;
+  branch_name_en?: string | undefined;
+  staff_name_ar?: string | undefined;
+  staff_name_en?: string | undefined;
   cashier_session: string;
   session_expires_at: string;
 };
 
-function CashierTerminal() {
-  const { locale, t, toggle } = useLocale();
+type ActivePassSheet = {
+  serial: string;
+  phone: string | null;
+  stamps: number;
+  points: number;
+  targetStamps: number;
+  programType: "stamp" | "points" | "coupon_morph";
+  morphed: boolean;
+  offer: string;
+  justUpdated?: boolean | undefined;
+  walletSynced?: boolean | undefined;
+  actionMessage?: string | undefined;
+};
+
+type RecentPassItem = {
+  serial: string;
+  phone: string | null;
+  stamps?: number | undefined;
+  timestamp: number;
+};
+
+function playPOSChime(type: "scan" | "stamp" | "reward" | "error" = "scan") {
+  if (typeof window === "undefined") return;
+  try {
+    const AudioCtx =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    if (type === "scan") {
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + 0.08);
+      gain.gain.setValueAtTime(0.12, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.12);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.12);
+    } else if (type === "stamp") {
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(523.25, ctx.currentTime);
+      osc.frequency.setValueAtTime(659.25, ctx.currentTime + 0.06);
+      osc.frequency.setValueAtTime(783.99, ctx.currentTime + 0.12);
+      gain.gain.setValueAtTime(0.15, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.22);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.22);
+    } else if (type === "reward") {
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(659.25, ctx.currentTime);
+      osc.frequency.setValueAtTime(783.99, ctx.currentTime + 0.08);
+      osc.frequency.setValueAtTime(1046.5, ctx.currentTime + 0.16);
+      gain.gain.setValueAtTime(0.2, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.35);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.35);
+    } else {
+      osc.type = "sawtooth";
+      osc.frequency.setValueAtTime(220, ctx.currentTime);
+      gain.gain.setValueAtTime(0.1, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.15);
+    }
+  } catch {
+    // AudioContext blocked or not supported
+  }
+}
+
+function triggerHaptic(type: "scan" | "stamp" | "reward" = "scan") {
+  if (typeof navigator === "undefined" || !("vibrate" in navigator)) return;
+  try {
+    if (type === "scan") navigator.vibrate(30);
+    else if (type === "stamp") navigator.vibrate([40, 30, 50]);
+    else if (type === "reward") navigator.vibrate([60, 40, 80, 40, 100]);
+  } catch {
+    // Vibration blocked
+  }
+}
+
+function extractSerialFromQR(text: string): string {
+  const trimmed = text.trim();
+  try {
+    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+      const url = new URL(trimmed);
+      const fromParam = url.searchParams.get("serial") || url.searchParams.get("pass");
+      if (fromParam) return fromParam.trim();
+      const segments = url.pathname.split("/").filter(Boolean);
+      const last = segments[segments.length - 1];
+      if (last && (last.startsWith("PP-") || last.length > 5)) {
+        return last.trim();
+      }
+    }
+  } catch {
+    // Fall back to regex / raw
+  }
+  const match = trimmed.match(/PP-[A-Za-z0-9_-]+/i);
+  if (match) return match[0];
+  return trimmed;
+}
+
+function getRecentPasses(slug: string): RecentPassItem[] {
+  if (typeof window === "undefined" || !slug) return [];
+  try {
+    const raw = localStorage.getItem(`cashier_recent_passes_${slug}`);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRecentPass(
+  slug: string,
+  serial: string,
+  phone: string | null,
+  stamps?: number,
+): RecentPassItem[] {
+  if (typeof window === "undefined" || !slug || !serial) return [];
+  try {
+    const existing = getRecentPasses(slug);
+    const filtered = existing.filter((p) => p.serial !== serial);
+    const updated = [{ serial, phone, stamps, timestamp: Date.now() }, ...filtered].slice(0, 5);
+    localStorage.setItem(`cashier_recent_passes_${slug}`, JSON.stringify(updated));
+    return updated;
+  } catch {
+    return [];
+  }
+}
+
+export function CashierTerminal() {
+  const { locale, toggle } = useLocale();
   const ar = locale === "ar";
 
+  // Login & Setup State
   const [slug, setSlug] = useState(() => {
     if (typeof window !== "undefined") {
       const p = new URLSearchParams(window.location.search);
@@ -79,17 +251,32 @@ function CashierTerminal() {
   );
   const [showManualSetup, setShowManualSetup] = useState(false);
   const [authenticating, setAuthenticating] = useState(false);
+
+  // Active POS Session State
   const [business, setBusiness] = useState<BusinessInfo | null>(null);
   const [cashierSession, setCashierSession] = useState<string | null>(null);
-  const [serial, setSerial] = useState<string | null>(null);
-  const [amount, setAmount] = useState("");
+  const [templateMeta, setTemplateMeta] = useState<PassTemplateMeta>(() =>
+    parsePassTemplateMeta(null),
+  );
+
+  // Terminal Mode: 'camera' | 'manual'
+  const [activeMode, setActiveMode] = useState<"camera" | "manual">("camera");
+
+  // Camera Viewfinder State
   const [scanning, setScanning] = useState(false);
-  const [lastResult, setLastResult] = useState<{
-    success: boolean;
-    message: string;
-    balance?: string;
-  } | null>(null);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [scannerFlashing, setScannerFlashing] = useState(false);
   const scannerRef = useRef<{ stop: () => Promise<void>; clear: () => void } | null>(null);
+
+  // Manual Input State (Quick Bar + Manual Mode)
+  const [manualInput, setManualInput] = useState("");
+  const [lookupLoading, setLookupLoading] = useState(false);
+  const [recentPasses, setRecentPasses] = useState<RecentPassItem[]>([]);
+
+  // Active Post-Scan Customer Pass Sheet
+  const [activePass, setActivePass] = useState<ActivePassSheet | null>(null);
+  const [actionInProgress, setActionInProgress] = useState(false);
+  const [amount, setAmount] = useState("");
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -109,12 +296,60 @@ function CashierTerminal() {
     };
   }, []);
 
+  // Update recent passes when business is loaded
+  useEffect(() => {
+    if (business?.business_slug) {
+      setRecentPasses(getRecentPasses(business.business_slug));
+    }
+  }, [business?.business_slug]);
+
+  // Keyboard navigation & POS shortcuts
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (!business) return;
+
+      if (e.key === "Escape") {
+        if (activePass) {
+          handleNextCustomer();
+        }
+      } else if (e.key === "Enter" && !e.shiftKey) {
+        if (activePass?.justUpdated) {
+          e.preventDefault();
+          handleNextCustomer();
+        }
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [business, activePass]);
+
+  async function loadBusinessBranding(bSlug: string) {
+    try {
+      const { data: bData } = await supabase
+        .rpc("get_public_business_by_slug", { _slug: bSlug })
+        .maybeSingle();
+      if (bData) {
+        const row = bData as Record<string, unknown>;
+        return {
+          template_id: (row["template_id"] as string) ?? null,
+          brand_color: (row["brand_color"] as string) ?? null,
+          accent_color: (row["accent_color"] as string) ?? null,
+          offer_ar: (row["offer_ar"] as string) ?? null,
+          offer_en: (row["offer_en"] as string) ?? null,
+        };
+      }
+    } catch {
+      // Direct RPC fallback
+    }
+    return null;
+  }
+
   async function unlockTerminal(e?: React.FormEvent) {
     if (e) e.preventDefault();
     const cleanSlug = slug.trim().toLowerCase();
 
     if (!cleanSlug) {
-      toast.error(ar ? "يرجى كتابة اسم/معرّف المطعم (Slug)" : "Please enter restaurant slug");
+      toast.error(ar ? "يرجى كتابة اسم/معرّف المطعم (Slug)" : "Please enter business slug");
       return;
     }
     if (pin.length !== 4) {
@@ -139,9 +374,11 @@ function CashierTerminal() {
             })
             .maybeSingle()
         : await supabase.rpc("cashier_unlock", { _slug: cleanSlug, _pin: pin }).maybeSingle();
+
       const biz = data as UnlockResult | null;
 
       if (error || !biz) {
+        playPOSChime("error");
         toast.error(
           ar ? "اسم المنشأة أو رمز PIN غير صحيح" : "Incorrect business slug or cashier PIN",
         );
@@ -149,13 +386,18 @@ function CashierTerminal() {
         return;
       }
 
-      // Success: Save slug for quick future logins on this device
       localStorage.setItem("cashier_last_slug", cleanSlug);
       if (branchCode) {
         localStorage.setItem("cashier_last_branch", branchCode);
         localStorage.setItem("cashier_last_staff", staffCode);
         localStorage.setItem("cashier_device_name", deviceName);
       }
+
+      // Query template metadata and branding for live terminal display
+      const branding = await loadBusinessBranding(cleanSlug);
+      const parsedMeta = parsePassTemplateMeta(branding?.template_id);
+      setTemplateMeta(parsedMeta);
+
       setBusiness({
         business_id: biz.business_id,
         business_slug: biz.business_slug,
@@ -165,13 +407,27 @@ function CashierTerminal() {
         branch_name_en: biz.branch_name_en,
         staff_name_ar: biz.staff_name_ar,
         staff_name_en: biz.staff_name_en,
+        template_id: branding?.template_id ?? null,
+        brand_color: branding?.brand_color ?? null,
+        accent_color: branding?.accent_color ?? null,
+        offer_ar: branding?.offer_ar ?? null,
+        offer_en: branding?.offer_en ?? null,
+        target_stamps: 8,
       });
+
       setCashierSession(biz.cashier_session);
       setPin("");
+      playPOSChime("scan");
       toast.success(
         ar ? `تم فتح الشاشة لـ ${biz.name_ar}` : `Terminal unlocked for ${biz.name_en}`,
       );
+
+      // Auto-start camera if in camera mode
+      setTimeout(() => {
+        void startScan();
+      }, 300);
     } catch {
+      playPOSChime("error");
       toast.error(ar ? "خطأ في الاتصال بالخادم" : "Connection error");
     } finally {
       setAuthenticating(false);
@@ -182,41 +438,183 @@ function CashierTerminal() {
     setBusiness(null);
     setCashierSession(null);
     setPin("");
-    setSerial(null);
+    setActivePass(null);
     scannerRef.current?.stop().catch(() => {});
     setScanning(false);
     if (showToast) toast.info(ar ? "تم إغلاق الشاشة" : "Terminal locked");
   }
 
   async function startScan() {
+    setCameraError(null);
     setScanning(true);
     try {
       const { Html5Qrcode } = await import("html5-qrcode");
+
+      // Stop previous instance if running
+      if (scannerRef.current) {
+        try {
+          await scannerRef.current.stop();
+        } catch {
+          // ignore
+        }
+      }
+
       const scanner = new Html5Qrcode("qr-reader");
       scannerRef.current = scanner as unknown as { stop: () => Promise<void>; clear: () => void };
+
       await scanner.start(
         { facingMode: "environment" },
-        { fps: 10, qrbox: 240 },
-        async (text) => {
-          setSerial(text);
-          await scanner.stop();
+        { fps: 12, qrbox: { width: 250, height: 250 } },
+        async (decodedText) => {
+          await handlePassDetected(decodedText);
+          try {
+            await scanner.stop();
+          } catch {
+            // ignore
+          }
           setScanning(false);
-          toast.success(ar ? "تم مسح البطاقة" : "Pass scanned");
         },
         () => {},
       );
-    } catch {
+    } catch (err: unknown) {
       setScanning(false);
-      toast.error(ar ? "تعذر فتح الكاميرا" : "Camera unavailable");
+      const errMsg = err instanceof Error ? err.message : String(err);
+      setCameraError(errMsg);
+      console.warn("Camera start note:", errMsg);
     }
   }
 
-  async function act(action: "stamp" | "points" | "redeem") {
-    if (!serial) {
-      toast.error(ar ? "امسح بطاقة أولاً" : "Scan a pass first");
-      return;
+  async function stopScan() {
+    try {
+      await scannerRef.current?.stop();
+    } catch {
+      // ignore
     }
-    if (!business || !cashierSession) {
+    setScanning(false);
+  }
+
+  async function handlePassDetected(rawText: string) {
+    if (!business) return;
+    const cleanSerial = extractSerialFromQR(rawText);
+    if (!cleanSerial) return;
+
+    playPOSChime("scan");
+    triggerHaptic("scan");
+    setScannerFlashing(true);
+    setTimeout(() => setScannerFlashing(false), 500);
+
+    // Save to recents immediately
+    const updatedRecents = saveRecentPass(business.business_slug, cleanSerial, null);
+    setRecentPasses(updatedRecents);
+
+    // Look up pass state from server
+    setLookupLoading(true);
+    try {
+      const res = await lookupCustomerPass({
+        data: {
+          slug: business.business_slug,
+          query: cleanSerial,
+        },
+      });
+
+      const passOffer =
+        res.offer ||
+        (ar ? business.offer_ar : business.offer_en) ||
+        (ar ? "مكافأة خاصة" : "Special Reward");
+
+      setActivePass({
+        serial: res.serial || cleanSerial,
+        phone: res.phone ?? null,
+        stamps: res.stamps ?? 0,
+        points: res.points ?? 0,
+        targetStamps: res.targetStamps || business.target_stamps || 8,
+        programType: res.programType || "stamp",
+        morphed: res.morphed ?? false,
+        offer: passOffer,
+      });
+
+      toast.success(
+        ar ? `تم مسح البطاقة: ••••${cleanSerial.slice(-6)}` : `Pass scanned: ••••${cleanSerial.slice(-6)}`,
+      );
+    } catch {
+      setActivePass({
+        serial: cleanSerial,
+        phone: null,
+        stamps: 0,
+        points: 0,
+        targetStamps: business.target_stamps || 8,
+        programType: "stamp",
+        morphed: false,
+        offer: (ar ? business.offer_ar : business.offer_en) || "Special Reward",
+      });
+      toast.success(ar ? "تم تسجيل معرّف البطاقة" : "Pass serial recognized");
+    } finally {
+      setLookupLoading(false);
+    }
+  }
+
+  async function handleManualSubmit(e?: React.FormEvent) {
+    if (e) e.preventDefault();
+    if (!business || !manualInput.trim()) return;
+
+    const query = manualInput.trim();
+    setLookupLoading(true);
+
+    try {
+      const res = await lookupCustomerPass({
+        data: {
+          slug: business.business_slug,
+          query,
+        },
+      });
+
+      const cleanSerial = res.serial || query;
+      const passOffer =
+        res.offer ||
+        (ar ? business.offer_ar : business.offer_en) ||
+        (ar ? "مكافأة خاصة" : "Special Reward");
+
+      playPOSChime("scan");
+      triggerHaptic("scan");
+
+      const updatedRecents = saveRecentPass(
+        business.business_slug,
+        cleanSerial,
+        res.phone || null,
+        res.stamps ?? 0,
+      );
+      setRecentPasses(updatedRecents);
+
+      setActivePass({
+        serial: cleanSerial,
+        phone: res.phone || (query.match(/^[0-9+]/) ? query : null),
+        stamps: res.stamps ?? 0,
+        points: res.points ?? 0,
+        targetStamps: res.targetStamps || business.target_stamps || 8,
+        programType: res.programType || "stamp",
+        morphed: res.morphed ?? false,
+        offer: passOffer,
+      });
+
+      toast.success(
+        res.isNew
+          ? ar
+            ? "تم تسجيل عميل جديد بختم ترحيبي!"
+            : "New customer enrolled with 1 welcome stamp!"
+          : ar
+            ? "تم العثور على بطاقة العميل"
+            : "Customer pass loaded",
+      );
+    } catch {
+      playPOSChime("error");
+      toast.error(ar ? "تعذر العثور على البطاقة" : "Could not find pass");
+    } finally {
+      setLookupLoading(false);
+    }
+  }
+
+  async function handleApplyAction(action: "stamp" | "points" | "redeem", count = 1) {
+    if (!activePass || !business || !cashierSession) {
       toast.error(
         ar ? "انتهت جلسة الكاشير. افتح الشاشة مجدداً" : "Cashier session expired. Unlock again",
       );
@@ -230,348 +628,939 @@ function CashierTerminal() {
       return;
     }
 
-    const actionInput = {
-      slug: business.business_slug,
-      cashierSession,
-      serial,
-      action,
-      ...(action === "points" ? { amountSar } : {}),
-    };
+    setActionInProgress(true);
+    try {
+      const res = await updateWalletPass({
+        data: {
+          slug: business.business_slug,
+          cashierSession,
+          serial: activePass.serial,
+          action,
+          count,
+          amountSar: action === "points" ? amountSar : undefined,
+          templateId: business.template_id,
+          brandColor: business.brand_color,
+          accentColor: business.accent_color,
+          businessName: ar ? business.name_ar : business.name_en,
+          offerText: ar ? business.offer_ar : business.offer_en,
+        },
+      });
 
-    const res = await updateWalletPass({
-      data: {
-        ...actionInput,
-      },
-    });
+      if (res.sessionExpired) {
+        playPOSChime("error");
+        toast.error(ar ? "انتهت جلسة الكاشير" : "Cashier session expired");
+        lockTerminal(false);
+        return;
+      }
 
-    let balanceStr = "";
-    if (res.programType === "points") {
-      balanceStr = `${res.points ?? 0} ${ar ? "نقطة" : "pts"}`;
-    } else if (res.programType === "stamp" || res.morphed) {
-      balanceStr = `${res.stamps ?? 0} / ${res.targetStamps ?? 9} ${ar ? "أختام" : "stamps"}`;
-    } else if (res.programType === "coupon_morph" && !res.morphed) {
-      balanceStr = ar ? "كوبون ترحيبي (تم الاستخدام)" : "Intro coupon redeemed";
+      if (res.recorded) {
+        const nextStamps =
+          res.stamps ?? (action === "stamp" ? activePass.stamps + count : activePass.stamps);
+        const nextPoints = res.points ?? activePass.points;
+        const target = res.targetStamps ?? activePass.targetStamps;
+
+        if (action === "redeem") {
+          playPOSChime("reward");
+          triggerHaptic("reward");
+        } else {
+          playPOSChime("stamp");
+          triggerHaptic("stamp");
+        }
+
+        let confirmMsg = "";
+        if (action === "stamp") {
+          confirmMsg = ar
+            ? `✓ تمت إضافة ${count > 1 ? count + " أختام" : "ختم"}! تم تحديث رصيد Apple Wallet إلى ${nextStamps}/${target}`
+            : `✓ +${count} Stamp${count > 1 ? "s" : ""} Added! Apple Wallet pass updated to ${nextStamps}/${target}`;
+        } else if (action === "redeem") {
+          confirmMsg = ar
+            ? "🎉 تم استلام المكافأة بنجاح! تم تجديد البطاقة للدورة القادمة."
+            : "🎉 Reward Redeemed! Card reset for next cycle.";
+        } else {
+          confirmMsg = ar
+            ? `✓ تم تسجيل المبلغ! رصيد النقاط: ${nextPoints}`
+            : `✓ SAR spend logged! Points balance: ${nextPoints} pts`;
+        }
+
+        setActivePass((prev) =>
+          prev
+            ? {
+                ...prev,
+                stamps: nextStamps,
+                points: nextPoints,
+                morphed: res.morphed ?? prev.morphed,
+                targetStamps: target,
+                justUpdated: true,
+                walletSynced: res.walletUpdated ?? res.ok,
+                actionMessage: confirmMsg,
+              }
+            : null,
+        );
+
+        saveRecentPass(business.business_slug, activePass.serial, activePass.phone, nextStamps);
+        toast.success(confirmMsg);
+      } else {
+        playPOSChime("error");
+        toast.error(res.error || (ar ? "تعذر تسجيل العملية" : "Could not record action"));
+      }
+    } catch (err: unknown) {
+      playPOSChime("error");
+      const msg = err instanceof Error ? err.message : ar ? "خطأ في الاتصال" : "Network error";
+      toast.error(msg);
+    } finally {
+      setActionInProgress(false);
+      if (action === "points") setAmount("");
     }
-
-    if (res.ok) {
-      toast.success(ar ? "تم تسجيل العملية وتحديث المحفظة" : "Action recorded and wallet updated");
-      setLastResult({
-        success: true,
-        message: ar ? "تم تسجيل العملية بنجاح" : "Action recorded successfully",
-        balance: balanceStr,
-      });
-    } else if (res.recorded) {
-      toast.warning(
-        ar
-          ? "تم تسجيل العملية، لكن مزامنة المحفظة غير متاحة"
-          : "Action recorded, but wallet sync is unavailable",
-      );
-      setLastResult({
-        success: true,
-        message: ar ? "تم تسجيل العملية في النظام" : "Action recorded in PointPass",
-        balance: balanceStr,
-      });
-    } else if (res.sessionExpired) {
-      toast.error(
-        ar ? "انتهت جلسة الكاشير. افتح الشاشة مجدداً" : "Cashier session expired. Unlock again",
-      );
-      setLastResult({
-        success: false,
-        message: ar ? "انتهت جلسة الكاشير" : "Cashier session expired",
-      });
-      lockTerminal(false);
-    } else {
-      toast.error(res.error ?? (ar ? "تعذر تسجيل العملية" : "Could not record action"));
-      setLastResult({
-        success: false,
-        message: res.error ?? (ar ? "تعذر تسجيل العملية" : "Could not record action"),
-      });
-    }
-    if (action === "points") setAmount("");
   }
 
-  // Locked Screen: Requires Restaurant Slug & Cashier PIN
+  function handleNextCustomer() {
+    setActivePass(null);
+    setManualInput("");
+    if (activeMode === "camera") {
+      void startScan();
+    }
+  }
+
+  const storeEmoji = iconToEmoji(templateMeta.stampIcon);
+
+  // =========================================================================
+  // 1. LOCKED TERMINAL SCREEN (PIN PAD)
+  // =========================================================================
   if (!business) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-surface-dark px-4">
-        <form
-          onSubmit={unlockTerminal}
-          className="w-full max-w-sm space-y-5 rounded-2xl border border-white/10 bg-white/5 p-6 text-center text-surface-dark-foreground shadow-2xl"
-        >
-          <div className="space-y-2">
-            <Lock className="mx-auto size-10 text-primary" />
-            <h1 className="text-xl font-bold">
-              {ar ? "تسجيل دخول الكاشير" : "Cashier POS Terminal"}
-            </h1>
-            <p className="text-xs text-muted-foreground">
-              {ar
-                ? "أدخل المنشأة ورمز PIN. أضف الفرع والموظف للجلسات المعرّفة."
-                : "Enter the business and PIN. Add branch and staff for identified sessions."}
-            </p>
-          </div>
+      <div className="min-h-screen bg-[#09090b] text-zinc-100 flex flex-col justify-between p-4 relative selection:bg-emerald-500/30 selection:text-emerald-200">
+        {/* Subtle top emerald glow */}
+        <div className="fixed inset-0 pointer-events-none bg-[radial-gradient(ellipse_at_top,_rgba(16,185,129,0.12),_transparent_65%)] -z-10" />
 
-          <div className="space-y-3 text-start">
-            {slug && branchCode && staffCode && !showManualSetup ? (
-              <div className="rounded-lg border border-white/20 bg-white/10 p-3 text-start flex items-center justify-between">
-                <div>
-                  <div className="text-xs text-white/70">
-                    {ar ? "محطة الكاشير المحددة" : "Configured Cashier Terminal"}
-                  </div>
-                  <div className="font-semibold text-white mt-0.5" dir="ltr">
-                    {slug} · {branchCode} / {staffCode}
-                  </div>
-                </div>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="text-xs text-white/70 hover:text-white"
-                  onClick={() => setShowManualSetup(true)}
-                >
-                  {ar ? "تعديل" : "Change"}
-                </Button>
-              </div>
-            ) : (
-              <>
-                <div>
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="restaurant-slug" className="text-xs text-muted-foreground">
-                      {ar ? "اسم المطعم/المنشأة (Slug)" : "Restaurant Slug"}
-                    </Label>
-                    {slug && branchCode && staffCode && showManualSetup ? (
-                      <button
-                        type="button"
-                        className="text-xs text-primary underline"
-                        onClick={() => setShowManualSetup(false)}
-                      >
-                        {ar ? "إخفاء التفاصيل" : "Collapse details"}
-                      </button>
-                    ) : null}
-                  </div>
-                  <div className="relative mt-1">
-                    <Store className="absolute start-3 top-3 size-4 text-muted-foreground" />
-                    <Input
-                      id="restaurant-slug"
-                      placeholder="my-coffee-shop"
-                      value={slug}
-                      onChange={(e) =>
-                        setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))
-                      }
-                      required
-                      dir="ltr"
-                      className="ps-9 border-white/20 bg-white/10 text-surface-dark-foreground"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <Label htmlFor="branch-code" className="text-xs text-muted-foreground">
-                      {ar ? "رمز الفرع" : "Branch code"}
-                    </Label>
-                    <Input
-                      id="branch-code"
-                      value={branchCode}
-                      onChange={(e) =>
-                        setBranchCode(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))
-                      }
-                      dir="ltr"
-                      className="mt-1 border-white/20 bg-white/10 text-surface-dark-foreground"
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="staff-code" className="text-xs text-muted-foreground">
-                      {ar ? "رمز الموظف" : "Staff code"}
-                    </Label>
-                    <Input
-                      id="staff-code"
-                      value={staffCode}
-                      onChange={(e) =>
-                        setStaffCode(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))
-                      }
-                      dir="ltr"
-                      className="mt-1 border-white/20 bg-white/10 text-surface-dark-foreground"
-                    />
-                  </div>
-                </div>
-              </>
-            )}
-
-            <div>
-              <Label htmlFor="device-name" className="text-xs text-muted-foreground">
-                {ar ? "اسم الجهاز (اختياري)" : "Device name (optional)"}
-              </Label>
-              <Input
-                id="device-name"
-                maxLength={120}
-                value={deviceName}
-                onChange={(e) => setDeviceName(e.target.value)}
-                placeholder={ar ? "كاشير ١" : "Register 1"}
-                className="mt-1 border-white/20 bg-white/10 text-surface-dark-foreground"
-              />
-            </div>
-
-            <div>
-              <Label htmlFor="cashier-pin" className="text-xs text-muted-foreground">
-                {ar ? "رمز PIN (٤ أرقام)" : "Cashier PIN (4 digits)"}
-              </Label>
-              <Input
-                id="cashier-pin"
-                type="password"
-                inputMode="numeric"
-                maxLength={4}
-                value={pin}
-                onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
-                placeholder="••••"
-                required
-                dir="ltr"
-                className="mt-1 border-white/20 bg-white/10 text-center text-2xl tracking-[0.5em] text-surface-dark-foreground"
-              />
-            </div>
-          </div>
-
-          {/* Keypad */}
-          <div className="grid grid-cols-3 gap-2 pt-2">
-            {["1", "2", "3", "4", "5", "6", "7", "8", "9", "C", "0", "↵"].map((k) => (
-              <Button
-                key={k}
-                type="button"
-                variant="secondary"
-                className="h-12 text-lg font-bold"
-                onClick={() => {
-                  if (k === "C") setPin("");
-                  else if (k === "↵") void unlockTerminal();
-                  else setPin((p) => (p + k).slice(0, 4));
-                }}
-              >
-                {k}
-              </Button>
-            ))}
-          </div>
-
-          <Button
-            type="submit"
-            className="w-full h-12 text-base font-bold"
-            disabled={authenticating}
+        {/* Top bar with back to dashboard and language switcher */}
+        <div className="w-full max-w-sm mx-auto flex items-center justify-between pt-2">
+          <Link
+            to="/dashboard"
+            className="inline-flex items-center gap-1.5 text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900/60 hover:bg-zinc-800/80 px-3 py-1.5 rounded-lg border border-zinc-800 transition-colors"
           >
-            {authenticating
-              ? ar
-                ? "جاري التحقق..."
-                : "Verifying..."
-              : ar
-                ? "دخول الشاشة"
-                : "Unlock Terminal"}
-          </Button>
-
+            <ArrowLeft className="size-3.5" />
+            <span>{ar ? "لوحة التحكم" : "Dashboard"}</span>
+          </Link>
           <Button
             type="button"
             variant="ghost"
-            className="text-xs text-surface-dark-foreground opacity-70"
+            size="sm"
+            className="text-xs text-zinc-400 hover:text-white"
             onClick={toggle}
           >
-            {t("language")}
+            <Globe className="size-3.5 me-1 text-zinc-500" />
+            <span>{ar ? "English" : "العربية"}</span>
           </Button>
-        </form>
+        </div>
+
+        {/* Center Card */}
+        <div className="w-full max-w-sm mx-auto my-auto">
+          <form
+            onSubmit={unlockTerminal}
+            className="space-y-5 rounded-2xl border border-zinc-800/80 bg-zinc-900/80 backdrop-blur-xl p-6 text-center shadow-2xl"
+          >
+            <div className="space-y-1.5">
+              <div className="mx-auto size-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center shadow-lg shadow-emerald-500/10">
+                <Lock className="size-6" />
+              </div>
+              <h1 className="text-xl font-bold tracking-tight text-zinc-100">
+                {ar ? "شاشة الكاشير" : "Cashier POS Terminal"}
+              </h1>
+              <p className="text-xs text-zinc-400">
+                {ar
+                  ? "أدخل معرّف المنشأة ورمز PIN المكون من ٤ أرقام"
+                  : "Enter business slug and 4-digit terminal PIN"}
+              </p>
+            </div>
+
+            <div className="space-y-3 text-start">
+              {slug && branchCode && staffCode && !showManualSetup ? (
+                <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3 flex items-center justify-between">
+                  <div>
+                    <div className="text-[11px] text-zinc-400">
+                      {ar ? "محطة الكاشير المحددة" : "Configured Terminal"}
+                    </div>
+                    <div className="font-semibold text-zinc-200 mt-0.5 text-xs font-mono" dir="ltr">
+                      {slug} · {branchCode} / {staffCode}
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="text-xs text-emerald-400 hover:text-emerald-300"
+                    onClick={() => setShowManualSetup(true)}
+                  >
+                    {ar ? "تعديل" : "Change"}
+                  </Button>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="restaurant-slug" className="text-xs text-zinc-400">
+                        {ar ? "اسم المنشأة (Slug)" : "Business Slug"}
+                      </Label>
+                      {slug && branchCode && staffCode && showManualSetup ? (
+                        <button
+                          type="button"
+                          className="text-xs text-emerald-400 underline"
+                          onClick={() => setShowManualSetup(false)}
+                        >
+                          {ar ? "إخفاء التفاصيل" : "Collapse"}
+                        </button>
+                      ) : null}
+                    </div>
+                    <div className="relative mt-1">
+                      <Store className="absolute start-3 top-3 size-4 text-zinc-500" />
+                      <Input
+                        id="restaurant-slug"
+                        placeholder="smash-burger"
+                        value={slug}
+                        onChange={(e) =>
+                          setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))
+                        }
+                        required
+                        dir="ltr"
+                        className="ps-9 border-zinc-800 bg-zinc-950/80 text-zinc-100 placeholder:text-zinc-600 focus-visible:ring-emerald-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <Label htmlFor="branch-code" className="text-xs text-zinc-400">
+                        {ar ? "رمز الفرع (اختياري)" : "Branch Code"}
+                      </Label>
+                      <Input
+                        id="branch-code"
+                        placeholder="main"
+                        value={branchCode}
+                        onChange={(e) =>
+                          setBranchCode(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))
+                        }
+                        dir="ltr"
+                        className="mt-1 border-zinc-800 bg-zinc-950/80 text-zinc-100 placeholder:text-zinc-600 focus-visible:ring-emerald-500"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="staff-code" className="text-xs text-zinc-400">
+                        {ar ? "رمز الموظف (اختياري)" : "Staff Code"}
+                      </Label>
+                      <Input
+                        id="staff-code"
+                        placeholder="cashier1"
+                        value={staffCode}
+                        onChange={(e) =>
+                          setStaffCode(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))
+                        }
+                        dir="ltr"
+                        className="mt-1 border-zinc-800 bg-zinc-950/80 text-zinc-100 placeholder:text-zinc-600 focus-visible:ring-emerald-500"
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* PIN Visual Display */}
+              <div>
+                <Label htmlFor="cashier-pin" className="text-xs text-zinc-400 flex items-center gap-1.5">
+                  <KeyRound className="size-3 text-emerald-400" />
+                  <span>{ar ? "رمز PIN (٤ أرقام)" : "Cashier PIN (4 digits)"}</span>
+                </Label>
+                <div className="mt-1.5 flex items-center justify-center gap-3 py-2 bg-zinc-950/70 border border-zinc-800 rounded-xl">
+                  {[0, 1, 2, 3].map((idx) => {
+                    const filled = pin.length > idx;
+                    return (
+                      <div
+                        key={idx}
+                        className={`size-3.5 rounded-full transition-all duration-200 ${
+                          filled
+                            ? "bg-emerald-400 scale-110 shadow-sm shadow-emerald-400/50"
+                            : "bg-zinc-800 border border-zinc-700"
+                        }`}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Tactile Keypad */}
+            <div className="grid grid-cols-3 gap-2 pt-1">
+              {["1", "2", "3", "4", "5", "6", "7", "8", "9", "C", "0", "↵"].map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  className={`h-12 rounded-xl text-lg font-bold transition-all active:scale-95 ${
+                    k === "↵"
+                      ? "bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-black shadow-lg shadow-emerald-500/20"
+                      : k === "C"
+                        ? "bg-zinc-800/80 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 border border-zinc-700/60"
+                        : "bg-zinc-800/60 hover:bg-zinc-700/80 text-zinc-200 border border-zinc-800"
+                  }`}
+                  onClick={() => {
+                    if (k === "C") setPin("");
+                    else if (k === "↵") void unlockTerminal();
+                    else setPin((p) => (p + k).slice(0, 4));
+                  }}
+                >
+                  {k}
+                </button>
+              ))}
+            </div>
+
+            <Button
+              type="submit"
+              className="w-full h-12 text-base font-bold bg-emerald-500 hover:bg-emerald-400 text-zinc-950 rounded-xl shadow-lg shadow-emerald-500/20"
+              disabled={authenticating || pin.length !== 4}
+            >
+              {authenticating
+                ? ar
+                  ? "جاري التحقق..."
+                  : "Verifying..."
+                : ar
+                  ? "دخول الشاشة"
+                  : "Unlock Terminal"}
+            </Button>
+          </form>
+        </div>
+
+        {/* Footer info */}
+        <div className="w-full max-w-sm mx-auto text-center pb-2 text-[11px] text-zinc-400">
+          PointPass V3 POS Engine · Linear × Apple Wallet Aesthetic
+        </div>
       </div>
     );
   }
 
-  // Unlocked POS Screen: Scoped to logged-in Business
+  // =========================================================================
+  // 2. UNLOCKED HIGH-SPEED POS TERMINAL SCREEN
+  // =========================================================================
   return (
-    <div className="min-h-screen bg-surface-dark text-surface-dark-foreground">
-      <header className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-        <div className="flex items-center gap-2">
-          <Store className="size-5 text-primary" />
-          <div>
-            <h1 className="font-bold text-sm">{ar ? business.name_ar : business.name_en}</h1>
-            <p className="text-[10px] text-muted-foreground dir-ltr">@{business.business_slug}</p>
-            {business.staff_name_en ? (
-              <p className="text-[10px] text-muted-foreground">
-                {ar ? business.staff_name_ar : business.staff_name_en} ·{" "}
-                {ar ? business.branch_name_ar : business.branch_name_en}
-              </p>
-            ) : null}
+    <div className="min-h-screen bg-[#09090b] text-zinc-100 flex flex-col selection:bg-emerald-500/30 selection:text-emerald-200">
+      {/* Top emerald atmospheric glow */}
+      <div className="fixed inset-0 pointer-events-none bg-[radial-gradient(ellipse_at_top,_rgba(16,185,129,0.10),_transparent_60%)] -z-10" />
+
+      {/* Screen flash on barcode decode */}
+      {scannerFlashing && (
+        <div className="fixed inset-0 pointer-events-none bg-emerald-500/20 z-50 animate-out fade-out duration-300" />
+      )}
+
+      {/* Top POS Header Bar */}
+      <header className="sticky top-0 z-30 border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur-xl px-4 py-2.5">
+        <div className="mx-auto max-w-xl flex items-center justify-between gap-2">
+          {/* Left: Dashboard link & Store badge */}
+          <div className="flex items-center gap-2.5 min-w-0">
+            <Link
+              to="/dashboard"
+              className="inline-flex items-center gap-1 text-xs text-zinc-400 hover:text-white bg-zinc-900 hover:bg-zinc-800 px-2.5 py-1.5 rounded-lg border border-zinc-800 transition-colors shrink-0"
+              title={ar ? "العودة للوحة التحكم" : "Return to Dashboard"}
+            >
+              <ArrowLeft className="size-3.5" />
+              <span className="hidden sm:inline">{ar ? "لوحة التحكم" : "Dashboard"}</span>
+            </Link>
+
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-xl shrink-0 p-1 rounded-lg bg-zinc-900 border border-zinc-800">
+                {storeEmoji}
+              </span>
+              <div className="min-w-0">
+                <div className="font-bold text-xs sm:text-sm text-zinc-100 truncate">
+                  {ar ? business.name_ar : business.name_en}
+                </div>
+                <div className="text-[10px] text-zinc-400 flex items-center gap-1.5 truncate">
+                  <span className="font-mono text-emerald-400">@{business.business_slug}</span>
+                  {business.staff_name_en && (
+                    <>
+                      <span>·</span>
+                      <span>{ar ? business.staff_name_ar : business.staff_name_en}</span>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Right: Language & Lock */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={toggle}
+              className="h-8 px-2 text-xs text-zinc-400 hover:text-zinc-200"
+            >
+              <Globe className="size-3.5 me-1 text-zinc-500" />
+              <span>{ar ? "EN" : "العربية"}</span>
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => lockTerminal()}
+              className="h-8 px-2.5 text-xs border-zinc-800 bg-zinc-900/60 hover:bg-red-500/10 hover:text-red-400 hover:border-red-500/20 text-zinc-400 transition-colors"
+            >
+              <LogOut className="size-3.5 me-1" />
+              <span>{ar ? "قفل" : "Lock"}</span>
+            </Button>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Button size="sm" variant="outline" onClick={toggle}>
-            {t("language")}
-          </Button>
-          <Button size="sm" variant="destructive" onClick={() => lockTerminal()}>
-            <LogOut className="size-3.5 me-1" />
-            {ar ? "خروج" : "Lock"}
-          </Button>
+
+        {/* Sub-bar: Mode Switcher Pill */}
+        <div className="mx-auto max-w-xl pt-2">
+          <div className="grid grid-cols-2 p-1 rounded-xl bg-zinc-900/80 border border-zinc-800/80">
+            <button
+              type="button"
+              className={`h-9 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all ${
+                activeMode === "camera"
+                  ? "bg-zinc-800 text-zinc-100 shadow-sm shadow-black"
+                  : "text-zinc-400 hover:text-zinc-200"
+              }`}
+              onClick={() => {
+                setActiveMode("camera");
+                if (!activePass) void startScan();
+              }}
+            >
+              <Camera className="size-3.5 text-emerald-400" />
+              <span>{ar ? "📷 مسح بالكاميرا" : "📷 Camera Scanner"}</span>
+            </button>
+            <button
+              type="button"
+              className={`h-9 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all ${
+                activeMode === "manual"
+                  ? "bg-zinc-800 text-zinc-100 shadow-sm shadow-black"
+                  : "text-zinc-400 hover:text-zinc-200"
+              }`}
+              onClick={() => {
+                setActiveMode("manual");
+                void stopScan();
+              }}
+            >
+              <Search className="size-3.5 text-blue-400" />
+              <span>{ar ? "⌨️ إدخال يدوي / جوال" : "⌨️ Manual / Phone"}</span>
+            </button>
+          </div>
         </div>
       </header>
 
-      <main className="mx-auto max-w-md space-y-5 p-4">
-        <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-          <div id="qr-reader" className="overflow-hidden rounded-xl" />
-          {!scanning ? (
-            <Button className="mt-3 h-14 w-full text-base font-bold" onClick={startScan}>
-              <Camera className="me-2 size-5" /> {t("scanNow")}
-            </Button>
-          ) : (
-            <p className="mt-3 text-center text-sm opacity-80">
-              {ar ? "جارٍ المسح…" : "Scanning…"}
-            </p>
-          )}
-          <p className="mt-3 text-center text-xs opacity-70 font-mono" aria-live="polite">
-            {serial
-              ? `${ar ? "البطاقة" : "Pass"}: ••••${serial.slice(-8)}`
-              : ar
-                ? "لم يتم مسح بطاقة بعد"
-                : "No pass scanned yet"}
-          </p>
-
-          {lastResult ? (
-            <div
-              className={`mt-3 rounded-xl border p-3 text-center text-xs ${
-                lastResult.success
-                  ? "border-primary/40 bg-primary/10 text-primary"
-                  : "border-destructive/40 bg-destructive/10 text-destructive"
-              }`}
-            >
-              <div className="font-bold text-sm">{lastResult.message}</div>
-              {lastResult.balance ? (
-                <div className="mt-1 text-white/90">
-                  {ar
-                    ? `الرصيد المحدث: ${lastResult.balance}`
-                    : `Updated balance: ${lastResult.balance}`}
+      {/* Main Terminal Body */}
+      <main className="mx-auto w-full max-w-xl flex-1 p-4 space-y-4">
+        {/* POST-SCAN CUSTOMER PASS SHEET */}
+        {activePass ? (
+          <div className="rounded-2xl border border-zinc-800/90 bg-zinc-900/90 backdrop-blur-xl p-5 space-y-5 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            {/* Customer Header */}
+            <div className="flex items-start justify-between gap-3 pb-3 border-b border-zinc-800">
+              <div className="flex items-center gap-3">
+                <div className="size-11 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+                  <User className="size-5" />
                 </div>
-              ) : null}
+                <div>
+                  <div className="font-bold text-sm sm:text-base text-zinc-100 flex items-center gap-2">
+                    <span>
+                      {activePass.phone || (ar ? "عميل زائر (Pass)" : "Loyalty Pass Customer")}
+                    </span>
+                  </div>
+                  <div className="text-xs font-mono text-zinc-400 mt-0.5" dir="ltr">
+                    {activePass.serial}
+                  </div>
+                </div>
+              </div>
+
+              {/* Status Badge */}
+              <div className="shrink-0 text-end">
+                {activePass.stamps >= activePass.targetStamps ? (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30 animate-pulse">
+                    <Sparkles className="size-3.5" />
+                    <span>{ar ? "المكافأة جاهزة!" : "Reward Ready!"}</span>
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                    <CheckCircle2 className="size-3.5" />
+                    <span>{ar ? "جاهز للختم" : "Ready to Stamp"}</span>
+                  </span>
+                )}
+              </div>
             </div>
-          ) : null}
-        </div>
 
-        <Button className="h-16 w-full text-lg font-bold" onClick={() => act("stamp")}>
-          <Stamp className="me-2 size-6" /> {t("stamp")}
-        </Button>
+            {/* Live Progress Display */}
+            <div className="space-y-3">
+              <div className="flex items-baseline justify-between">
+                <div>
+                  <div className="text-2xl sm:text-3xl font-extrabold tracking-tight text-zinc-100 font-mono">
+                    {activePass.programType === "points" ? (
+                      <>
+                        {activePass.points}{" "}
+                        <span className="text-sm font-normal text-zinc-400">
+                          {ar ? "نقطة" : "PTS"}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        {activePass.stamps} / {activePass.targetStamps}{" "}
+                        <span className="text-sm font-normal text-zinc-400">
+                          {ar ? "أختام" : "STAMPS"}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                  <div className="text-xs text-zinc-400 mt-0.5">
+                    {activePass.stamps >= activePass.targetStamps
+                      ? ar
+                        ? `🎉 حقق العميل المكافأة: ${activePass.offer}`
+                        : `🎉 Reward unlocked: ${activePass.offer}`
+                      : ar
+                        ? `متبقي ${Math.max(0, activePass.targetStamps - activePass.stamps)} أختام للحصول على: ${activePass.offer}`
+                        : `${Math.max(0, activePass.targetStamps - activePass.stamps)} left for: ${activePass.offer}`}
+                  </div>
+                </div>
 
-        <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-          <Input
-            inputMode="decimal"
-            placeholder={ar ? "المبلغ بالريال" : "Amount in SAR"}
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-            className="h-14 border-white/20 bg-white/10 text-center text-xl text-surface-dark-foreground"
-          />
-          <Button
-            className="mt-3 h-14 w-full text-base font-bold"
-            variant="secondary"
-            onClick={() => act("points")}
-          >
-            <Coins className="me-2 size-5" /> {t("logAmount")}
-          </Button>
-        </div>
+                {/* OTA Sync status indicator */}
+                <div className="text-end">
+                  <span
+                    className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md ${
+                      activePass.walletSynced !== false
+                        ? "text-emerald-400 bg-emerald-500/10 border border-emerald-500/20"
+                        : "text-zinc-400 bg-zinc-800"
+                    }`}
+                  >
+                    <Zap className="size-3" />
+                    <span>{ar ? "Apple Wallet OTA" : "Apple Wallet OTA"}</span>
+                  </span>
+                </div>
+              </div>
 
-        <Button
-          className="h-16 w-full bg-accent text-lg font-bold text-accent-foreground hover:bg-accent/90"
-          onClick={() => act("redeem")}
-        >
-          <Gift className="me-2 size-6" /> {t("redeem")}
-        </Button>
+              {/* Live Emoji Progress Bar & Badges */}
+              {activePass.programType !== "points" && (
+                <LiveEmojiProgressBar
+                  stamps={activePass.stamps}
+                  target={activePass.targetStamps}
+                  stampIcon={templateMeta.stampIcon}
+                  ar={ar}
+                />
+              )}
+            </div>
+
+            {/* Action Confirmation Banner */}
+            {activePass.actionMessage && (
+              <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-center text-xs text-emerald-300 font-medium animate-in fade-in duration-200">
+                {activePass.actionMessage}
+              </div>
+            )}
+
+            {/* Tactile Cashier Action Controls */}
+            <div className="space-y-2.5 pt-1">
+              {activePass.programType === "points" ? (
+                /* Points program: SAR spend input */
+                <div className="space-y-2">
+                  <div className="relative">
+                    <Input
+                      inputMode="decimal"
+                      placeholder={ar ? "المبلغ بالريال (SAR)" : "Amount in SAR"}
+                      value={amount}
+                      onChange={(e) => setAmount(e.target.value)}
+                      className="h-14 border-zinc-700 bg-zinc-950 text-center text-2xl font-bold text-zinc-100 placeholder:text-zinc-600 focus-visible:ring-emerald-500"
+                    />
+                  </div>
+                  <Button
+                    className="h-14 w-full text-base font-bold bg-emerald-500 hover:bg-emerald-400 text-zinc-950 rounded-xl shadow-lg shadow-emerald-500/20"
+                    disabled={actionInProgress}
+                    onClick={() => void handleApplyAction("points")}
+                  >
+                    <Coins className="me-2 size-5" />
+                    {actionInProgress
+                      ? ar
+                        ? "جاري التسجيل..."
+                        : "Recording..."
+                      : ar
+                        ? "تسجيل المبلغ وإضافة النقاط"
+                        : "Log SAR & Earn Points"}
+                  </Button>
+                </div>
+              ) : (
+                /* Stamp card program */
+                <>
+                  {/* Primary: +1 Stamp */}
+                  <Button
+                    className="h-14 w-full rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold text-lg shadow-lg shadow-emerald-500/20 active:scale-[0.99] transition-all"
+                    disabled={actionInProgress}
+                    onClick={() => void handleApplyAction("stamp", 1)}
+                  >
+                    <Stamp className="me-2 size-6" />
+                    {actionInProgress
+                      ? ar
+                        ? "جاري التحديث والمزامنة..."
+                        : "Syncing Wallet..."
+                      : ar
+                        ? "+1 ختم (إضافة ختم)"
+                        : "+1 Stamp"}
+                  </Button>
+
+                  {/* Quick Multiplier Pills: +2, +3, +5 Stamps */}
+                  <div className="grid grid-cols-3 gap-2">
+                    {[2, 3, 5].map((multiplier) => (
+                      <Button
+                        key={multiplier}
+                        type="button"
+                        variant="secondary"
+                        disabled={actionInProgress}
+                        className="h-11 rounded-xl bg-zinc-800/80 hover:bg-zinc-700 text-zinc-200 border border-zinc-700/60 font-semibold text-xs sm:text-sm active:scale-95"
+                        onClick={() => void handleApplyAction("stamp", multiplier)}
+                      >
+                        <Plus className="size-3.5 me-1 text-emerald-400" />
+                        <span>
+                          {ar ? `+${multiplier} أختام` : `+${multiplier} Stamps`}
+                        </span>
+                      </Button>
+                    ))}
+                  </div>
+
+                  {/* Reward Redemption Button: Highlighted when unlocked */}
+                  {activePass.stamps >= activePass.targetStamps && (
+                    <Button
+                      className="h-14 w-full rounded-xl bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-base sm:text-lg shadow-lg shadow-amber-500/25 active:scale-[0.99] transition-all"
+                      disabled={actionInProgress}
+                      onClick={() => void handleApplyAction("redeem")}
+                    >
+                      <Gift className="me-2 size-6" />
+                      {actionInProgress
+                        ? ar
+                          ? "جاري تسليم المكافأة..."
+                          : "Redeeming..."
+                        : ar
+                          ? `🎁 استلام المكافأة (${activePass.offer})`
+                          : `🎁 Redeem Reward (${activePass.offer})`}
+                    </Button>
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* Next Customer 2-Second Loop Button */}
+            <div className="pt-2 border-t border-zinc-800 flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="h-12 flex-1 rounded-xl border-zinc-700 bg-zinc-800/80 hover:bg-zinc-700 text-zinc-100 font-bold text-sm"
+                onClick={handleNextCustomer}
+              >
+                <span>{ar ? "مسح العميل التالي ←" : "Scan Next Customer →"}</span>
+                <span className="ms-2 text-[10px] text-zinc-400 font-normal hidden sm:inline">
+                  (Enter / Esc)
+                </span>
+              </Button>
+            </div>
+          </div>
+        ) : (
+          /* NO ACTIVE PASS SHEET -> VIEW CAMERA OR MANUAL LOOKUP */
+          <>
+            {activeMode === "camera" ? (
+              /* CAMERA SCANNER VIEWPORT */
+              <div className="space-y-4">
+                <div className="rounded-2xl border border-zinc-800 bg-zinc-950 p-4 shadow-2xl">
+                  {/* Viewport container */}
+                  <div className="relative aspect-square max-w-sm mx-auto overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 flex items-center justify-center">
+                    {/* The Html5Qrcode video canvas container */}
+                    <div id="qr-reader" className="w-full h-full overflow-hidden" />
+
+                    {/* Animated corner reticle & sweep line while scanning */}
+                    {scanning && (
+                      <div className="pointer-events-none absolute inset-6 flex flex-col justify-between">
+                        {/* Top reticles */}
+                        <div className="flex justify-between">
+                          <div className="size-6 border-s-2 border-t-2 border-emerald-400 rounded-tl-sm shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
+                          <div className="size-6 border-e-2 border-t-2 border-emerald-400 rounded-tr-sm shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
+                        </div>
+
+                        {/* Middle scanning laser line */}
+                        <div className="w-full h-0.5 bg-gradient-to-r from-transparent via-emerald-400 to-transparent shadow-[0_0_12px_rgba(16,185,129,0.8)] animate-pulse" />
+
+                        {/* Bottom reticles */}
+                        <div className="flex justify-between">
+                          <div className="size-6 border-s-2 border-b-2 border-emerald-400 rounded-bl-sm shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
+                          <div className="size-6 border-e-2 border-b-2 border-emerald-400 rounded-br-sm shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Fallback state if camera is off or denied */}
+                    {cameraError && (
+                      <div className="absolute inset-0 bg-zinc-950/95 flex flex-col items-center justify-center p-6 text-center space-y-3 z-20">
+                        <CameraOff className="size-10 text-zinc-500" />
+                        <div className="text-xs text-zinc-300 max-w-[240px]">
+                          {ar
+                            ? "تعذر فتح الكاميرا (يرجى السماح بالوصول أو استخدام الإدخال اليدوي)"
+                            : "Camera access unavailable or denied. Use manual lookup below."}
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          className="text-xs"
+                          onClick={() => setActiveMode("manual")}
+                        >
+                          {ar ? "الانتقال للإدخال اليدوي" : "Switch to Manual Lookup"}
+                        </Button>
+                      </div>
+                    )}
+
+                    {/* Camera stopped prompt */}
+                    {!scanning && !cameraError && (
+                      <div className="absolute inset-0 bg-zinc-950/90 flex flex-col items-center justify-center p-6 text-center space-y-3 z-10">
+                        <QrCode className="size-12 text-zinc-600" />
+                        <p className="text-xs text-zinc-400">
+                          {ar ? "الكاميرا جاهزة للمسح" : "Camera viewfinder paused"}
+                        </p>
+                        <Button
+                          className="h-11 px-5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold text-xs"
+                          onClick={() => void startScan()}
+                        >
+                          <Camera className="me-2 size-4" />
+                          {ar ? "تشغيل الكاميرا الآن" : "Start Camera"}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Scan status footer */}
+                  <div className="mt-3 text-center">
+                    <p className="text-xs text-zinc-400">
+                      {scanning
+                        ? ar
+                          ? "وجّه رمز QR لبطاقة المحفظة داخل الإطار..."
+                          : "Align Apple Wallet pass QR inside frame..."
+                        : ar
+                          ? "اضغط لتشغيل الكاميرا والمسح التلقائي"
+                          : "Tap button above to arm camera"}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Quick Manual Entry Bar directly below camera */}
+                <form
+                  onSubmit={handleManualSubmit}
+                  className="rounded-2xl border border-zinc-800/80 bg-zinc-900/80 backdrop-blur-xl p-3 flex items-center gap-2"
+                >
+                  <Search className="size-4 text-zinc-500 ms-2 shrink-0" />
+                  <Input
+                    placeholder={
+                      ar
+                        ? "أو اكتب كود البطاقة (PP-...) أو رقم الجوال..."
+                        : "Or paste pass serial (PP-...) or phone..."
+                    }
+                    value={manualInput}
+                    onChange={(e) => setManualInput(e.target.value)}
+                    dir="ltr"
+                    className="border-0 bg-transparent text-xs text-zinc-100 placeholder:text-zinc-600 focus-visible:ring-0"
+                  />
+                  <Button
+                    type="submit"
+                    size="sm"
+                    disabled={lookupLoading || !manualInput.trim()}
+                    className="h-9 px-3 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs shrink-0"
+                  >
+                    {lookupLoading ? (
+                      <RefreshCw className="size-3 animate-spin" />
+                    ) : ar ? (
+                      "بحث"
+                    ) : (
+                      "Go"
+                    )}
+                  </Button>
+                </form>
+              </div>
+            ) : (
+              /* MANUAL CODE / PHONE LOOKUP MODE */
+              <div className="space-y-4">
+                <form
+                  onSubmit={handleManualSubmit}
+                  className="rounded-2xl border border-zinc-800/80 bg-zinc-900/80 backdrop-blur-xl p-5 space-y-4 shadow-2xl"
+                >
+                  <div className="space-y-1">
+                    <h2 className="text-base font-bold text-zinc-100 flex items-center gap-2">
+                      <Search className="size-4 text-emerald-400" />
+                      <span>{ar ? "البحث اليدوي عن البطاقة" : "Manual Pass / Phone Lookup"}</span>
+                    </h2>
+                    <p className="text-xs text-zinc-400">
+                      {ar
+                        ? "أدخل معرّف البطاقة (PP-XXXXXX) أو رقم جوال العميل (05XXXXXXXX)"
+                        : "Enter Pass Serial (PP-XXXXXX) or Customer Phone (+9665...)"}
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="relative">
+                      <Input
+                        autoFocus
+                        placeholder="PP-482019 or 0501234567"
+                        value={manualInput}
+                        onChange={(e) => setManualInput(e.target.value)}
+                        dir="ltr"
+                        className="h-14 border-zinc-700 bg-zinc-950 font-mono text-base text-zinc-100 placeholder:text-zinc-600 focus-visible:ring-emerald-500"
+                      />
+                    </div>
+                    <Button
+                      type="submit"
+                      disabled={lookupLoading || !manualInput.trim()}
+                      className="h-12 w-full rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold text-sm shadow-lg shadow-emerald-500/20"
+                    >
+                      {lookupLoading ? (
+                        <RefreshCw className="size-4 animate-spin me-2" />
+                      ) : (
+                        <Search className="size-4 me-2" />
+                      )}
+                      {lookupLoading
+                        ? ar
+                          ? "جارٍ البحث والتحقق..."
+                          : "Looking up pass..."
+                        : ar
+                          ? "بحث واستعراض البطاقة"
+                          : "Find Customer Pass"}
+                    </Button>
+                  </div>
+                </form>
+
+                {/* Quick-Select Recent Passes */}
+                <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/80 backdrop-blur-xl p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-zinc-300">
+                      {ar ? "البطاقات الممسوحة مؤخراً" : "Recent Passes in this Terminal"}
+                    </span>
+                    <span className="text-[10px] text-zinc-500">
+                      {recentPasses.length} {ar ? "عملاء" : "passes"}
+                    </span>
+                  </div>
+
+                  {recentPasses.length > 0 ? (
+                    <div className="space-y-2">
+                      {recentPasses.map((item) => (
+                        <button
+                          key={item.serial}
+                          type="button"
+                          className="w-full flex items-center justify-between p-2.5 rounded-xl border border-zinc-800 bg-zinc-950/60 hover:bg-zinc-800/60 text-start transition-colors"
+                          onClick={() => {
+                            setManualInput(item.serial);
+                            void handlePassDetected(item.serial);
+                          }}
+                        >
+                          <div className="min-w-0">
+                            <div className="font-mono text-xs text-zinc-200 truncate" dir="ltr">
+                              {item.serial}
+                            </div>
+                            <div className="text-[10px] text-zinc-400 mt-0.5">
+                              {item.phone || (ar ? "عميل زائر" : "Guest Pass")}
+                            </div>
+                          </div>
+                          <div className="text-end shrink-0">
+                            <span className="text-xs font-semibold text-emerald-400">
+                              {item.stamps !== undefined ? `${item.stamps} 🏷️` : "→"}
+                            </span>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    /* Default Demo shortcuts for immediate desktop testing */
+                    <div className="p-3 rounded-xl border border-dashed border-zinc-800 text-center space-y-2">
+                      <p className="text-xs text-zinc-500">
+                        {ar
+                          ? "لا توجد بطاقات حديثة بعد. يمكنك تجربة رقم جوال تجريبي:"
+                          : "No recent passes yet. Try a test customer phone:"}
+                      </p>
+                      <button
+                        type="button"
+                        className="text-xs font-mono text-emerald-400 hover:underline bg-emerald-500/10 px-2.5 py-1 rounded-md border border-emerald-500/20"
+                        onClick={() => {
+                          setManualInput("+966501234567");
+                        }}
+                      >
+                        +966501234567
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </>
+        )}
       </main>
     </div>
   );
 }
+
+// =========================================================================
+// 3. LIVE EMOJI PROGRESS BAR & TACTILE STAMP BADGES
+// =========================================================================
+function LiveEmojiProgressBar({
+  stamps,
+  target,
+  stampIcon,
+  ar,
+}: {
+  stamps: number;
+  target: number;
+  stampIcon: string;
+  ar: boolean;
+}) {
+  const emoji = iconToEmoji(stampIcon);
+  const isUnlocked = stamps >= target;
+
+  const slots = Array.from({ length: target }, (_, i) => {
+    const isEarned = i < stamps;
+    const isRewardSlot = i === target - 1;
+
+    return {
+      index: i + 1,
+      isEarned,
+      isRewardSlot,
+      displayEmoji: isEarned ? emoji : isRewardSlot ? "🎁" : "⚪",
+    };
+  });
+
+  return (
+    <div className="space-y-3">
+      {/* Visual Apple Wallet String Preview */}
+      <div className="rounded-xl bg-zinc-950/80 border border-zinc-800/80 p-3 text-center">
+        <div className="text-[11px] uppercase tracking-wider text-zinc-400 font-mono mb-1.5 flex items-center justify-center gap-1.5">
+          <span>{ar ? "شريط المحفظة المباشر" : "Live Wallet Bar"}</span>
+          <span className="text-zinc-600">·</span>
+          <span className="text-emerald-400 font-semibold font-mono">
+            {stamps}/{target}
+          </span>
+        </div>
+        <div className="text-2xl sm:text-3xl tracking-widest font-mono select-all py-1">
+          {isUnlocked ? (
+            <span className="text-amber-400 font-bold animate-pulse text-base sm:text-lg tracking-normal">
+              🎁 {ar ? "المكافأة جاهزة للاستلام!" : "REWARD UNLOCKED!"}
+            </span>
+          ) : (
+            slots.map((s) => s.displayEmoji).join(" ")
+          )}
+        </div>
+      </div>
+
+      {/* Tactile Stamp Badges Grid */}
+      <div className="grid grid-cols-5 sm:grid-cols-6 md:grid-cols-8 gap-2 justify-center">
+        {slots.map((slot) => {
+          const isCurrentStamp = slot.index === stamps;
+          return (
+            <div
+              key={slot.index}
+              className={`relative flex flex-col items-center justify-center aspect-square rounded-xl border transition-all duration-300 ${
+                slot.isEarned
+                  ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-300 shadow-sm shadow-emerald-500/10 scale-[1.02]"
+                  : slot.isRewardSlot
+                    ? "bg-amber-500/10 border-amber-500/30 text-amber-400"
+                    : "bg-zinc-950/40 border-zinc-800/80 text-zinc-600"
+              } ${isCurrentStamp ? "ring-2 ring-emerald-400/60 ring-offset-1 ring-offset-zinc-950" : ""}`}
+            >
+              <span className="text-xl sm:text-2xl drop-shadow">{slot.displayEmoji}</span>
+              <span className="text-[9px] font-mono mt-0.5 text-zinc-400">
+                {slot.isRewardSlot ? (ar ? "المكافأة" : "Reward") : `#${slot.index}`}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+export default CashierTerminal;

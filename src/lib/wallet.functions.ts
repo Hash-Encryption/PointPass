@@ -67,6 +67,7 @@ function getPublicStripUrl(
     const params = new URLSearchParams({
       stamps: String(stamps),
       target: String(target),
+      v: String(Date.now()), // Cache-busted timestamp for live OTA Apple Wallet sync
     });
     if (brandColor) params.set("brand", brandColor);
     if (accentColor) params.set("accent", accentColor);
@@ -464,45 +465,68 @@ const updatePassSchema = z.object({
   serial: z.string().min(1).max(128),
   action: z.enum(["stamp", "points", "redeem"]),
   amountSar: z.number().finite().positive().max(100000).optional(),
+  count: z.number().int().min(1).max(20).optional(),
+  templateId: z.string().optional().nullable(),
+  brandColor: z.string().optional().nullable(),
+  accentColor: z.string().optional().nullable(),
+  businessName: z.string().optional().nullable(),
+  offerText: z.string().optional().nullable(),
+  customerName: z.string().optional().nullable(),
 });
+
+type CashierActionState = {
+  wallet_serial: string | null;
+  pass_serial: string;
+  pass_program_type: "stamp" | "points" | "coupon_morph";
+  pass_stamps: number;
+  pass_points: number;
+  pass_morphed: boolean;
+  business_name: string;
+  business_offer: string;
+  business_target_stamps: number;
+  business_sar_per_point?: number;
+};
 
 export const updateWalletPass = createServerFn({ method: "POST" })
   .validator((d: unknown) => updatePassSchema.parse(d))
   .handler(async ({ data }) => {
     const supabase = createServerSupabaseClient();
-    const { data: actionData, error: actionError } = await supabase
-      .rpc("cashier_apply_action", {
-        _slug: data.slug,
-        _session_token: data.cashierSession,
-        _serial: data.serial,
-        _action: data.action,
-        _amount_sar: data.amountSar ?? null,
-      })
-      .single();
+    const repeatCount = data.action === "stamp" ? Math.min(20, Math.max(1, data.count ?? 1)) : 1;
 
-    if (actionError) {
-      const sessionExpired = actionError.message === "Cashier session invalid or expired";
+    let actionData: CashierActionState | null = null;
+    let actionError: { message: string } | null = null;
+
+    for (let i = 0; i < repeatCount; i++) {
+      const { data: stepData, error: stepError } = await supabase
+        .rpc("cashier_apply_action", {
+          _slug: data.slug,
+          _session_token: data.cashierSession,
+          _serial: data.serial,
+          _action: data.action,
+          _amount_sar: data.amountSar ?? null,
+        })
+        .single();
+
+      if (stepError) {
+        actionError = stepError;
+        break;
+      }
+      actionData = stepData as CashierActionState;
+    }
+
+    if (actionError || !actionData) {
+      const sessionExpired = actionError?.message === "Cashier session invalid or expired";
       return {
         ok: false as const,
         recorded: false as const,
         sessionExpired,
         error: sessionExpired
           ? "Cashier session expired. Unlock the terminal again."
-          : actionError.message,
+          : (actionError?.message ?? "Failed to apply loyalty action"),
       };
     }
 
-    const state = actionData as {
-      wallet_serial: string | null;
-      pass_serial: string;
-      pass_program_type: "stamp" | "points" | "coupon_morph";
-      pass_stamps: number;
-      pass_points: number;
-      pass_morphed: boolean;
-      business_name: string;
-      business_offer: string;
-      business_target_stamps: number;
-    } | null;
+    const state: CashierActionState = actionData;
 
     if (!state?.wallet_serial) {
       return {
@@ -517,45 +541,99 @@ export const updateWalletPass = createServerFn({ method: "POST" })
       };
     }
 
-    // Query business visual branding to update the strip image with the new stamp count
-    const { data: biz } = await supabase
-      .from("businesses")
-      .select("brand_color,accent_color,logo_url,offer_ar,offer_en,custom_domain")
-      .eq("slug", data.slug)
-      .maybeSingle();
+    // Query business visual branding (colors, logo, template metadata, offer texts)
+    // First try direct table query; if blocked under anon RLS, fall back to get_public_business_by_slug RPC
+    let biz: {
+      slug?: string | null;
+      name_ar?: string | null;
+      name_en?: string | null;
+      brand_color?: string | null;
+      accent_color?: string | null;
+      logo_url?: string | null;
+      offer_ar?: string | null;
+      offer_en?: string | null;
+      custom_domain?: string | null;
+      template_id?: string | null;
+      target_stamps?: number | null;
+    } | null = null;
 
-    let rawTemplateId: string | null = null;
     try {
-      const { data: tplRow } = await supabase
+      const { data: bizRow } = await supabase
         .from("businesses")
-        .select("template_id")
+        .select(
+          "slug,name_ar,name_en,brand_color,accent_color,logo_url,offer_ar,offer_en,custom_domain,template_id,target_stamps",
+        )
         .eq("slug", data.slug)
         .maybeSingle();
-      if (tplRow && (tplRow as { template_id?: string | null }).template_id) {
-        rawTemplateId = (tplRow as { template_id?: string | null }).template_id!;
+      if (bizRow) {
+        biz = bizRow;
       }
     } catch {
-      // Table column may not exist yet
+      // Direct select may be blocked by anon RLS
     }
 
-    if (!rawTemplateId && biz?.custom_domain?.startsWith("tpl_")) {
-      rawTemplateId = biz.custom_domain;
+    if (!biz || !biz.template_id || !biz.brand_color) {
+      try {
+        const { data: rpcBiz } = await supabase
+          .rpc("get_public_business_by_slug", { _slug: data.slug })
+          .maybeSingle();
+        if (rpcBiz) {
+          const row = rpcBiz as Record<string, unknown>;
+          biz = {
+            ...biz,
+            slug: (row["slug"] as string) ?? biz?.slug ?? data.slug,
+            name_ar: (row["name_ar"] as string) ?? biz?.name_ar ?? null,
+            name_en: (row["name_en"] as string) ?? biz?.name_en ?? null,
+            brand_color: (row["brand_color"] as string) ?? biz?.brand_color ?? null,
+            accent_color: (row["accent_color"] as string) ?? biz?.accent_color ?? null,
+            logo_url: (row["logo_url"] as string) ?? biz?.logo_url ?? null,
+            offer_ar: (row["offer_ar"] as string) ?? biz?.offer_ar ?? null,
+            offer_en: (row["offer_en"] as string) ?? biz?.offer_en ?? null,
+            template_id: (row["template_id"] as string) ?? biz?.template_id ?? null,
+          };
+        }
+      } catch {
+        // Fallback
+      }
     }
+
+    // Blend server & client-forwarded branding attributes (cashier session fallback)
+    const effectiveBrandColor = biz?.brand_color || data.brandColor || null;
+    const effectiveAccentColor = biz?.accent_color || data.accentColor || null;
+    const rawTemplateId: string | null =
+      biz?.template_id ||
+      data.templateId ||
+      (biz?.custom_domain?.startsWith("tpl_") ? biz.custom_domain : null);
 
     const templateMeta = parsePassTemplateMeta(rawTemplateId);
-    const targetStamps = state.business_target_stamps || 8;
+    const targetStamps = state.business_target_stamps || biz?.target_stamps || 8;
     const currentStamps = state.pass_stamps ?? 0;
     const isStampCard =
       state.pass_program_type === "stamp" || state.pass_program_type === "coupon_morph";
 
+    const passBusinessName =
+      biz?.name_ar ||
+      biz?.name_en ||
+      data.businessName ||
+      state.business_name ||
+      "Loyalty Pass";
+
+    const passOffer =
+      biz?.offer_ar ||
+      biz?.offer_en ||
+      data.offerText ||
+      state.business_offer ||
+      "Special Reward";
+
     const icon =
       templateMeta.stampIcon !== "star"
         ? templateMeta.stampIcon
-        : resolveStampIcon(
-            null,
-            biz?.offer_ar || biz?.offer_en || state.business_offer,
-            biz?.brand_color,
-          );
+        : resolveStampIcon(null, passOffer, effectiveBrandColor);
+
+    const effectiveColorPreset =
+      rawTemplateId && rawTemplateId.includes("preset-")
+        ? templateMeta.colorPreset
+        : resolveColorPreset(effectiveBrandColor, effectiveAccentColor);
 
     let stripDataUri: string | undefined;
     let stripUrl: string | undefined;
@@ -565,8 +643,8 @@ export const updateWalletPass = createServerFn({ method: "POST" })
           data.slug,
           currentStamps,
           targetStamps,
-          biz?.brand_color,
-          biz?.accent_color,
+          effectiveBrandColor,
+          effectiveAccentColor,
           icon,
           templateMeta.stripStyle,
         );
@@ -574,8 +652,8 @@ export const updateWalletPass = createServerFn({ method: "POST" })
           stripDataUri = generateStampStripDataUri({
             targetStamps,
             stamps: currentStamps,
-            brandColor: biz?.brand_color,
-            accentColor: biz?.accent_color,
+            brandColor: effectiveBrandColor,
+            accentColor: effectiveAccentColor,
             stampIcon: icon,
             stripStyle: templateMeta.stripStyle,
           });
@@ -590,20 +668,20 @@ export const updateWalletPass = createServerFn({ method: "POST" })
 
     const passState: WalletPassState = {
       serial: state.pass_serial,
-      businessName: state.business_name,
-      offer: state.business_offer,
+      businessName: passBusinessName,
+      offer: passOffer,
       programType: state.pass_program_type,
       stamps: currentStamps,
       points: state.pass_points,
       morphed: state.pass_morphed,
       targetStamps,
-      brandColor: biz?.brand_color,
-      accentColor: biz?.accent_color,
+      brandColor: effectiveBrandColor,
+      accentColor: effectiveAccentColor,
       stripUrl,
       stripDataUri,
       logoUrl: biz?.logo_url,
       stampIcon: icon,
-      colorPreset: templateMeta.colorPreset,
+      colorPreset: effectiveColorPreset,
       stripStyle: templateMeta.stripStyle,
       tierMode: templateMeta.tierMode,
       ...(data.action === "redeem" ? { notification: "Reward redeemed" } : {}),
@@ -636,7 +714,74 @@ export const updateWalletPass = createServerFn({ method: "POST" })
       points: state.pass_points,
       morphed: state.pass_morphed,
       programType: state.pass_program_type,
-      targetStamps: state.business_target_stamps,
+      targetStamps,
+      templateMeta,
+      businessOffer: passOffer,
+      walletUpdated: result.ok,
+    };
+  });
+
+const lookupCustomerSchema = z.object({
+  slug: z.string().min(1).max(64),
+  query: z.string().min(1).max(128),
+});
+
+export const lookupCustomerPass = createServerFn({ method: "POST" })
+  .validator((d: unknown) => lookupCustomerSchema.parse(d))
+  .handler(async ({ data }) => {
+    const supabase = createServerSupabaseClient();
+    const query = data.query.trim();
+    const isPhone = /^[0-9+() -]{6,20}$/.test(query);
+
+    if (isPhone) {
+      const { data: claimData, error: claimError } = await supabase
+        .rpc("claim_public_pass", {
+          _slug: data.slug,
+          _phone: query,
+        })
+        .single();
+
+      if (!claimError && claimData) {
+        const claim = claimData as {
+          pass_serial: string;
+          pass_program_type: "stamp" | "points" | "coupon_morph";
+          business_name: string;
+          business_offer: string;
+          business_target_stamps: number;
+          pass_stamps: number;
+          pass_points: number;
+          pass_morphed: boolean;
+          pass_wallet_serial: string | null;
+          is_resumed: boolean;
+        };
+        return {
+          ok: true as const,
+          found: true as const,
+          serial: claim.pass_serial,
+          phone: query,
+          stamps: claim.pass_stamps ?? 0,
+          points: claim.pass_points ?? 0,
+          targetStamps: claim.business_target_stamps || 8,
+          programType: claim.pass_program_type,
+          morphed: claim.pass_morphed,
+          offer: claim.business_offer,
+          isNew: !claim.is_resumed,
+        };
+      }
+    }
+
+    return {
+      ok: true as const,
+      found: false as const,
+      serial: query,
+      phone: null,
+      stamps: 0,
+      points: 0,
+      targetStamps: 8,
+      programType: "stamp" as const,
+      morphed: false,
+      offer: "",
+      isNew: false,
     };
   });
 
