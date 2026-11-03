@@ -39,6 +39,7 @@ type Business = {
   program_type: ProgramType;
   offer_ar: string;
   offer_en: string;
+  template_id?: string | null;
 };
 
 function ClaimPage() {
@@ -108,6 +109,11 @@ function ClaimPage() {
         data: {
           slug,
           phone: effectivePhone,
+          brandColor: business?.brand_color,
+          accentColor: business?.accent_color,
+          templateId: business?.template_id,
+          offerAr: business?.offer_ar,
+          offerEn: business?.offer_en,
         },
       });
 
@@ -298,11 +304,20 @@ function ClaimPage() {
             </form>
           ) : resumedInfo?.alreadyEnrolled && !links?.apple && !links?.google ? (
             <div className="space-y-4 text-center">
-              <div className="flex items-center justify-center gap-2 text-primary font-bold text-lg">
+              <div
+                className="flex items-center justify-center gap-2 font-bold text-lg"
+                style={{ color: business?.accent_color || "#10B981" }}
+              >
                 <Sparkles className="size-5" />
                 <span>{ar ? "مرحباً بعودتك!" : "Welcome back!"}</span>
               </div>
-              <div className="rounded-2xl border border-primary/20 bg-primary/5 p-4">
+              <div
+                className="rounded-2xl border p-4"
+                style={{
+                  borderColor: `${business?.accent_color || "#10B981"}33`,
+                  backgroundColor: `${business?.accent_color || "#10B981"}10`,
+                }}
+              >
                 <div className="text-xs text-muted-foreground">
                   {ar ? "حالة البطاقة" : "Pass Status"}
                 </div>
@@ -310,11 +325,17 @@ function ClaimPage() {
                   {ar ? "البطاقة نشطة ومسجلة في محفظتك" : "Pass is active in your phone wallet"}
                 </div>
                 {resumedInfo.programType === "points" ? (
-                  <div className="mt-3 text-2xl font-extrabold text-primary">
+                  <div
+                    className="mt-3 text-2xl font-extrabold"
+                    style={{ color: business?.accent_color || "#10B981" }}
+                  >
                     {resumedInfo.points ?? 0} {ar ? "نقطة" : "Points"}
                   </div>
                 ) : (
-                  <div className="mt-3 text-2xl font-extrabold text-primary">
+                  <div
+                    className="mt-3 text-2xl font-extrabold"
+                    style={{ color: business?.accent_color || "#10B981" }}
+                  >
                     {resumedInfo.stamps ?? 0} / {resumedInfo.targetStamps ?? 9}{" "}
                     {ar ? "أختام" : "Stamps"}
                   </div>
@@ -339,7 +360,10 @@ function ClaimPage() {
             </div>
           ) : (
             <div className="space-y-3 text-center">
-              <div className="flex items-center justify-center gap-2 text-primary font-bold text-lg">
+              <div
+                className="flex items-center justify-center gap-2 font-bold text-lg"
+                style={{ color: business?.accent_color || "#10B981" }}
+              >
                 <Sparkles className="size-5" />
                 <span>
                   {resumedInfo?.isResumed
@@ -359,11 +383,14 @@ function ClaimPage() {
 
               <Button
                 asChild={Boolean(links?.apple)}
-                className={`h-12 w-full text-base ${
+                className="h-12 w-full text-base bg-surface-dark text-surface-dark-foreground hover:bg-surface-dark/90"
+                style={
                   isAppleDevice
-                    ? "bg-surface-dark text-surface-dark-foreground hover:bg-surface-dark/90 ring-2 ring-primary"
-                    : "bg-surface-dark text-surface-dark-foreground"
-                }`}
+                    ? {
+                        boxShadow: `0 0 0 2px ${business?.accent_color || "#10B981"}`,
+                      }
+                    : undefined
+                }
                 disabled={!links?.apple}
               >
                 {links?.apple ? (
@@ -380,7 +407,14 @@ function ClaimPage() {
               <Button
                 asChild={Boolean(links?.google)}
                 variant={isAppleDevice ? "outline" : "default"}
-                className={`h-12 w-full text-base ${!isAppleDevice ? "ring-2 ring-primary" : ""}`}
+                className="h-12 w-full text-base"
+                style={
+                  !isAppleDevice
+                    ? {
+                        boxShadow: `0 0 0 2px ${business?.accent_color || "#10B981"}`,
+                      }
+                    : undefined
+                }
                 disabled={!links?.google}
               >
                 {links?.google ? (

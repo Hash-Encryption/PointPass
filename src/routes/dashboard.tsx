@@ -39,26 +39,29 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { LocalQrCode, downloadQrCanvas } from "@/components/LocalQrCode";
 import {
   Activity,
   AlertTriangle,
-  ShieldCheck,
-  Sparkles,
-  Zap,
   Building2,
   Copy,
   CreditCard,
   Download,
   Edit3,
   ExternalLink,
+  Globe,
   LayoutDashboard,
   Loader2,
   LogOut,
   QrCode,
   ShieldAlert,
+  ShieldCheck,
+  Smartphone,
+  Sparkles,
   Store,
   Trash2,
   Users,
+  Zap,
 } from "lucide-react";
 import { isOwner, isManager, isCashier, type OperationsAccess } from "@/lib/access";
 
@@ -103,7 +106,7 @@ type Business = {
 };
 
 function MerchantDashboard() {
-  const { locale, t } = useLocale();
+  const { locale, t, toggle } = useLocale();
   const ar = locale === "ar";
   const [authReady, setAuthReady] = useState(false);
   const [user, setUser] = useState<User | null>(null);
@@ -111,10 +114,12 @@ function MerchantDashboard() {
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const [tierMode, setTierMode] = useState<WalletTierMode>(getStoredWalletTier);
-  const [colorPreset, setColorPreset] = useState<WalletColorPreset>("dark");
+  const [colorPreset, setColorPreset] = useState<WalletColorPreset>("green");
   const [stripStyle, setStripStyle] = useState<StripStyle>("pizzatown");
   const [stampIcon, setStampIcon] = useState<string>("⭐");
-  const [activeTemplateId, setActiveTemplateId] = useState<string>("custom");
+  const [activeTemplateId, setActiveTemplateId] = useState<string>("blank");
+  const [showQrModal, setShowQrModal] = useState(false);
+  const [qrModalCanvas, setQrModalCanvas] = useState<HTMLCanvasElement | null>(null);
 
   const [program, setProgram] = useState<ProgramType>("stamp");
   const tpl = PASS_TEMPLATES[program];
@@ -222,6 +227,18 @@ function MerchantDashboard() {
 
   const businesses = businessesQuery.data ?? [];
   const business = businesses.find((item) => item.id === businessId) ?? businesses[0] ?? null;
+
+  const joinUrl =
+    typeof window !== "undefined"
+      ? `${window.location.origin}/join/${business?.slug ?? ""}`
+      : `https://pointpass.pages.dev/join/${business?.slug ?? ""}`;
+
+  function copyJoinLink() {
+    if (typeof navigator !== "undefined" && navigator.clipboard) {
+      void navigator.clipboard.writeText(joinUrl);
+      toast.success(ar ? "تم نسخ رابط الانضمام!" : "Join link copied to clipboard!");
+    }
+  }
 
   useEffect(() => {
     if (!business) return;
@@ -696,83 +713,177 @@ function MerchantDashboard() {
         </div>
       )}
 
-      <PortalNav
-        title={t("merchantPortal")}
-        subtitle={ar ? design.businessName : design.businessNameEn}
-      />
-
-      <main className="mx-auto max-w-7xl px-4 py-8">
-        <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
-          <div className="min-w-64 space-y-2">
-            <Label htmlFor="active-business">{ar ? "المنشأة" : "Business"}</Label>
-            <select
-              id="active-business"
-              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-              value={business.id}
-              onChange={(event) => setBusinessId(event.target.value)}
-              disabled={businesses.length === 1}
-            >
-              {businesses.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {ar ? item.name_ar : item.name_en}
-                </option>
-              ))}
-            </select>
-          </div>
+      {/* Sleek Dark Command Center Header */}
+      <header className="sticky top-0 z-40 w-full border-b border-zinc-800/80 bg-zinc-950/90 backdrop-blur-xl px-4 sm:px-8 py-3 transition-colors">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3">
+          {/* Brand & Store Selector */}
           <div className="flex items-center gap-3">
-            <span className="text-xs text-muted-foreground" dir="ltr">
-              {user.email}
-            </span>
-            <Button size="sm" variant="outline" onClick={() => supabase.auth.signOut()}>
-              <LogOut className="size-4" /> {ar ? "تسجيل الخروج" : "Sign out"}
+            <div className="size-10 rounded-xl bg-gradient-to-tr from-emerald-600 via-emerald-500 to-emerald-400 text-zinc-950 flex items-center justify-center font-black shadow-[0_0_15px_rgba(16,185,129,0.25)] ring-1 ring-emerald-300/40 shrink-0">
+              <CreditCard className="size-5 stroke-[2.5]" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="font-extrabold text-white text-base tracking-tight truncate max-w-[180px] sm:max-w-none">
+                  {ar ? business.name_ar : business.name_en}
+                </h1>
+                {tierMode === "pro" ? (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20 shadow-xs">
+                    <Zap className="size-3" />
+                    Pro Studio
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 shadow-xs">
+                    <ShieldCheck className="size-3" />
+                    Free Tier
+                  </span>
+                )}
+              </div>
+              {businesses.length > 1 ? (
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <span className="text-[11px] text-zinc-500">{ar ? "التبديل:" : "Switch:"}</span>
+                  <select
+                    id="active-business"
+                    className="text-xs text-zinc-300 bg-transparent border-0 p-0 focus:ring-0 cursor-pointer font-medium hover:text-white"
+                    value={business.id}
+                    onChange={(event) => setBusinessId(event.target.value)}
+                  >
+                    {businesses.map((item) => (
+                      <option key={item.id} value={item.id} className="bg-zinc-900 text-white">
+                        {ar ? item.name_ar : item.name_en}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : (
+                <div className="text-[11px] text-zinc-500 font-mono truncate max-w-[220px] sm:max-w-none">
+                  pointpass.pages.dev/join/{business.slug}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Quick Action Buttons & User Controls */}
+          <div className="flex items-center gap-2 sm:gap-2.5">
+            {/* Quick Action 1: Cashier Scanner */}
+            <Button
+              asChild
+              size="sm"
+              className="h-9 px-3 sm:px-4 text-xs font-semibold bg-zinc-900 hover:bg-zinc-800 text-white border border-zinc-700/80 shadow-xs"
+            >
+              <a href="/scan" target="_blank" rel="noopener noreferrer">
+                <Smartphone className="size-3.5 me-1.5 text-emerald-400" />
+                <span className="hidden sm:inline">
+                  {ar ? "شاشة الكاشير (/scan)" : "Cashier Scanner"}
+                </span>
+                <span className="sm:hidden">{ar ? "كاشير" : "Scan"}</span>
+              </a>
+            </Button>
+
+            {/* Quick Action 2: Counter Stand QR */}
+            <Button
+              size="sm"
+              onClick={() => setShowQrModal(true)}
+              className="h-9 px-3 sm:px-4 text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white shadow-[0_0_15px_rgba(16,185,129,0.25)]"
+            >
+              <QrCode className="size-3.5 me-1.5" />
+              <span className="hidden sm:inline">
+                {ar ? "ستاند الكاشير QR" : "Counter Stand QR"}
+              </span>
+              <span className="sm:hidden">QR</span>
+            </Button>
+
+            {/* Language Switcher */}
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={toggle}
+              className="h-8 px-2.5 text-xs text-zinc-400 hover:text-white hover:bg-zinc-900"
+            >
+              <Globe className="size-3.5 me-1 text-zinc-400" />
+              <span>{ar ? "EN" : "العربية"}</span>
+            </Button>
+
+            {/* Sign Out */}
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => supabase.auth.signOut()}
+              className="h-8 px-2 text-xs text-zinc-400 hover:text-red-400 hover:bg-red-500/10"
+              title={ar ? "تسجيل الخروج" : "Sign out"}
+            >
+              <LogOut className="size-4" />
             </Button>
           </div>
         </div>
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="flex flex-wrap">
-            <TabsTrigger value="overview">
-              <LayoutDashboard className="me-1.5 size-4" />
-              {t("overview")}
-            </TabsTrigger>
-            <TabsTrigger value="customers">
-              <Users className="me-1.5 size-4" />
-              {t("customers")}
-            </TabsTrigger>
-            <TabsTrigger value="operations">
-              <Building2 className="me-1.5 size-4" />
-              {t("locationsAndTeam")}
-            </TabsTrigger>
-            <TabsTrigger value="analytics">
-              <Activity className="me-1.5 size-4" />
-              {t("analytics")}
-            </TabsTrigger>
-            {isOwnerUser ? (
-              <>
-                <TabsTrigger value="designer">
-                  <Edit3 className="me-1.5 size-4" />
-                  {t("passDesigner")}
+      </header>
+
+      <main className="mx-auto max-w-7xl px-4 sm:px-8 py-6">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+          <div className="flex items-center overflow-x-auto pb-1 border-b border-zinc-800">
+            <TabsList className="bg-zinc-900/80 border border-zinc-800/80 p-1 rounded-xl h-auto flex flex-nowrap">
+              <TabsTrigger
+                value="overview"
+                className="data-[state=active]:bg-zinc-800 data-[state=active]:text-white text-xs px-3.5 py-2 rounded-lg font-medium text-zinc-400"
+              >
+                <LayoutDashboard className="me-1.5 size-4 text-emerald-400" />
+                {ar ? "نظرة عامة" : "Overview"}
+              </TabsTrigger>
+              {isOwnerUser && (
+                <TabsTrigger
+                  value="designer"
+                  className="data-[state=active]:bg-zinc-800 data-[state=active]:text-white text-xs px-3.5 py-2 rounded-lg font-medium text-zinc-400"
+                >
+                  <Edit3 className="me-1.5 size-4 text-blue-400" />
+                  {ar ? "استوديو البطاقة" : "Card Studio"}
                 </TabsTrigger>
-                <TabsTrigger value="qr">
-                  <QrCode className="me-1.5 size-4" />
-                  {t("joinQr")}
+              )}
+              <TabsTrigger
+                value="customers"
+                className="data-[state=active]:bg-zinc-800 data-[state=active]:text-white text-xs px-3.5 py-2 rounded-lg font-medium text-zinc-400"
+              >
+                <Users className="me-1.5 size-4 text-purple-400" />
+                {ar ? "العملاء" : "Customers"}
+              </TabsTrigger>
+              {isOwnerUser && (
+                <TabsTrigger
+                  value="push"
+                  className="data-[state=active]:bg-zinc-800 data-[state=active]:text-white text-xs px-3.5 py-2 rounded-lg font-medium text-zinc-400"
+                >
+                  <Sparkles className="me-1.5 size-4 text-amber-400" />
+                  {ar ? "الحملات والإشعارات" : "Campaigns & Push"}
                 </TabsTrigger>
-                <TabsTrigger value="push">{t("campaigns")}</TabsTrigger>
-                <TabsTrigger value="geo">{t("geofence")}</TabsTrigger>
-                <TabsTrigger value="billing">
-                  <CreditCard className="me-1.5 size-4" />
-                  {t("planAndBilling")}
+              )}
+              <TabsTrigger
+                value="operations"
+                className="data-[state=active]:bg-zinc-800 data-[state=active]:text-white text-xs px-3.5 py-2 rounded-lg font-medium text-zinc-400"
+              >
+                <Building2 className="me-1.5 size-4 text-teal-400" />
+                {ar ? "الفروع والفريق" : "Locations & Team"}
+              </TabsTrigger>
+              {isOwnerUser && (
+                <TabsTrigger
+                  value="billing"
+                  className="data-[state=active]:bg-zinc-800 data-[state=active]:text-white text-xs px-3.5 py-2 rounded-lg font-medium text-zinc-400"
+                >
+                  <CreditCard className="me-1.5 size-4 text-indigo-400" />
+                  {ar ? "الإعدادات والاشتراك" : "Settings & Billing"}
                 </TabsTrigger>
-              </>
-            ) : null}
-          </TabsList>
+              )}
+            </TabsList>
+          </div>
 
           {/* Main Overview Tab */}
-          <TabsContent value="overview" className="mt-6 space-y-6">
+          <TabsContent value="overview" className="mt-4 space-y-6">
             {isOwnerUser ? (
               <OwnerOverview
                 business={business}
                 ar={ar}
                 onNavigateTab={(tab) => setActiveTab(tab)}
+                design={design}
+                tierMode={tierMode}
+                colorPreset={colorPreset}
+                stripStyle={stripStyle}
+                stampIcon={stampIcon}
               />
             ) : (
               <ManagerOverview
@@ -1538,6 +1649,78 @@ function MerchantDashboard() {
                   ) : (
                     "Confirm Reset"
                   )}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Counter Stand QR Quick Modal */}
+        {showQrModal && (
+          <div className="fixed inset-0 z-50 grid place-items-center bg-black/80 backdrop-blur-md px-4">
+            <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl space-y-5 text-center">
+              <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
+                <div className="flex items-center gap-2">
+                  <QrCode className="size-5 text-emerald-400" />
+                  <h3 className="text-base font-bold text-white">
+                    {ar ? "ستاند الكاشير ورابط الانضمام" : "Counter Stand QR & Join Link"}
+                  </h3>
+                </div>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setShowQrModal(false)}
+                  className="size-8 p-0 text-zinc-400 hover:text-white"
+                >
+                  ✕
+                </Button>
+              </div>
+
+              <div className="flex justify-center p-4 bg-zinc-950 rounded-xl border border-zinc-800">
+                <div className="p-3 bg-white rounded-lg shadow-lg">
+                  <LocalQrCode
+                    text={joinUrl}
+                    size={200}
+                    onReady={(canvas) => setQrModalCanvas(canvas)}
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-3 flex items-center justify-between gap-2">
+                <span className="truncate font-mono text-xs text-zinc-300" dir="ltr">
+                  {joinUrl}
+                </span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={copyJoinLink}
+                  className="text-xs text-emerald-400 hover:text-emerald-300 shrink-0"
+                >
+                  <Copy className="size-3.5 me-1" />
+                  {ar ? "نسخ" : "Copy"}
+                </Button>
+              </div>
+
+              <div className="flex gap-2.5">
+                <Button
+                  onClick={() => {
+                    downloadQrCanvas(qrModalCanvas, `${business.slug}-counter-qr.png`);
+                    toast.success(ar ? "تم تحميل رمز QR!" : "QR code downloaded!");
+                  }}
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs h-10"
+                >
+                  <Download className="size-4 me-2" />
+                  {ar ? "تحميل (PNG)" : "Download (PNG)"}
+                </Button>
+                <Button
+                  asChild
+                  variant="outline"
+                  className="flex-1 border-zinc-700 bg-zinc-800 text-zinc-200 text-xs h-10"
+                >
+                  <a href={joinUrl} target="_blank" rel="noopener noreferrer">
+                    <ExternalLink className="size-4 me-2" />
+                    {ar ? "فتح صفحة العميل" : "Open Join Page"}
+                  </a>
                 </Button>
               </div>
             </div>

@@ -182,6 +182,25 @@ assert.equal(welcomePass.primaryFields[0].value, "🍔 ⚪ ⚪ ⚪ 🎁");
 assert.equal(welcomePass.secondaryFields[0].value, "4 left");
 assert.equal(welcomePass.secondaryFields[1].value, "Free burger meal of your choice 🍔");
 
+// Anon pass-through test: Car Wash preset
+const carwashPass = buildBaselineWalletPassPayload({
+  serial: "carwash-1",
+  businessName: "Speedy Wash",
+  offer: "Free complete car wash 🚗",
+  programType: "stamp",
+  stamps: 1,
+  points: 0,
+  morphed: false,
+  targetStamps: 5,
+  brandColor: "#082F49",
+  accentColor: "#06B6D4",
+  stampIcon: "🚗",
+});
+assert.equal(carwashPass.logoText, "🚗 Speedy Wash");
+assert.equal(carwashPass.colorPreset, "blue");
+assert.equal(carwashPass.primaryFields[0].label, "STAMP PROGRESS 🚗");
+assert.equal(carwashPass.primaryFields[0].value, "🚗 ⚪ ⚪ ⚪ 🎁");
+
 // Reward unlocked baseline state
 const unlockedBaseline = buildBaselineWalletPassPayload({
   serial: "free-pass-unlocked",
