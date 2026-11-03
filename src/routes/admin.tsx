@@ -44,7 +44,7 @@ import {
   type StripStyle,
   type WalletTierMode,
 } from "@/lib/wallet-tier";
-import { generateStampStripDataUri } from "@/lib/strip-generator";
+import { generateStampStripSvgDataUri } from "@/lib/strip-svg";
 
 export const Route = createFileRoute("/admin")({
   head: () => ({
@@ -131,7 +131,7 @@ function AdminPortal() {
 
   const inspectorStripUri = useMemo(() => {
     try {
-      return generateStampStripDataUri({
+      return generateStampStripSvgDataUri({
         targetStamps: inspectorTarget,
         stamps: inspectorStamps,
         brandColor: inspectorBrand,
@@ -598,7 +598,9 @@ function AdminPortal() {
                   />
                   {inspectorStripUri && (
                     <a
-                      href={inspectorStripUri}
+                      href={`/api/strip/preview.png?stamps=${inspectorStamps}&target=${inspectorTarget}&brand=${encodeURIComponent(inspectorBrand)}&accent=${encodeURIComponent(inspectorAccent)}&icon=${encodeURIComponent(inspectorIcon)}&style=${inspectorStyle}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
                       download={`strip-${inspectorStyle}-${inspectorStamps}of${inspectorTarget}.png`}
                       className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] bg-zinc-950 border border-zinc-800 text-zinc-300 hover:text-white hover:border-zinc-700 transition-colors ml-auto"
                     >

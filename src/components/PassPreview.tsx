@@ -2,10 +2,11 @@ import { useState, useMemo } from "react";
 import { autoContrast, type PassTemplate, type ProgramType } from "@/constants/defaultTemplates";
 import type { Locale } from "@/lib/i18n";
 import { Apple, QrCode, Smartphone } from "lucide-react";
-import { generateStampStripDataUri, type StripStyle } from "@/lib/strip-generator";
+import { generateStampStripSvgDataUri } from "@/lib/strip-svg";
 import {
   iconToEmoji,
   WALLET_COLOR_PRESETS,
+  type StripStyle,
   type WalletColorPreset,
   type WalletTierMode,
 } from "@/lib/wallet-tier";
@@ -88,7 +89,7 @@ function PassBody({
   const stripDataUri = useMemo(() => {
     if (isFree) return null;
     try {
-      return generateStampStripDataUri({
+      return generateStampStripSvgDataUri({
         targetStamps: target,
         stamps: current,
         brandColor: design.background,

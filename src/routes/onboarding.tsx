@@ -13,6 +13,7 @@ import { LoyaltySetupStep } from "@/components/onboarding/LoyaltySetupStep";
 import { RewardSetupStep } from "@/components/onboarding/RewardSetupStep";
 import { LaunchStep } from "@/components/onboarding/LaunchStep";
 import { type ProgramType } from "@/constants/defaultTemplates";
+import { parsePassTemplateMeta } from "@/lib/wallet-tier";
 
 export const Route = createFileRoute("/onboarding")({
   head: () => ({
@@ -24,6 +25,9 @@ export const Route = createFileRoute("/onboarding")({
       },
     ],
   }),
+  loader: async () => {
+    return { authenticated: false };
+  },
   component: OnboardingRoute,
 });
 
@@ -42,6 +46,7 @@ type OnboardingBusiness = {
   sar_per_point: number | null;
   points_per_reward: number;
   stamp_icon?: string;
+  template_id?: string | null;
 };
 
 function OnboardingRoute() {
@@ -78,15 +83,23 @@ function OnboardingRoute() {
     queryKey: ["onboarding-admin-role", user?.id],
     enabled: Boolean(user),
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("user_roles")
-        .select("role")
-        .eq("user_id", user!.id)
-        .eq("role", "super_admin")
-        .is("business_id", null)
-        .maybeSingle();
-      if (error) throw error;
-      return data;
+      try {
+        const { data, error } = await supabase
+          .from("user_roles")
+          .select("role")
+          .eq("user_id", user!.id)
+          .eq("role", "super_admin")
+          .is("business_id", null)
+          .maybeSingle();
+        if (error) {
+          console.warn("adminRoleQuery warning:", error.message);
+          return null;
+        }
+        return data;
+      } catch (err) {
+        console.warn("adminRoleQuery exception:", err);
+        return null;
+      }
     },
   });
 
@@ -95,30 +108,47 @@ function OnboardingRoute() {
     queryKey: ["onboarding-business-check", user?.id],
     enabled: Boolean(user),
     queryFn: async () => {
-      const { data: businesses, error } = await supabase
-        .from("businesses")
-        .select(
-          "id,slug,name_ar,name_en,plan,program_type,offer_ar,offer_en,brand_color,accent_color,target_stamps,sar_per_point,points_per_reward",
-        )
-        .order("created_at", { ascending: false })
-        .limit(1);
+      try {
+        const { data: businesses, error } = await supabase
+          .from("businesses")
+          .select(
+            "id,slug,name_ar,name_en,plan,program_type,offer_ar,offer_en,brand_color,accent_color,target_stamps,sar_per_point,points_per_reward,template_id",
+          )
+          .order("created_at", { ascending: false })
+          .limit(1);
 
-      if (error) throw error;
-      if (!businesses || businesses.length === 0) return null;
+        if (error) {
+          console.warn("businessQuery warning:", error.message);
+          return null;
+        }
+        if (!businesses || businesses.length === 0) return null;
 
-      const biz = businesses[0] as OnboardingBusiness;
+        const biz = businesses[0] as OnboardingBusiness;
 
-      // Look up onboarding record
-      const { data: onb } = await supabase
-        .from("business_onboarding")
-        .select("step,completed")
-        .eq("business_id", biz.id)
-        .maybeSingle();
+        if (biz.template_id) {
+          try {
+            const meta = parsePassTemplateMeta(biz.template_id);
+            biz.stamp_icon = meta.stampIcon;
+          } catch {
+            // Safe fallback if format differs
+          }
+        }
 
-      return {
-        business: biz,
-        onboarding: onb as { step: string; completed: boolean } | null,
-      };
+        // Look up onboarding record
+        const { data: onb } = await supabase
+          .from("business_onboarding")
+          .select("step,completed")
+          .eq("business_id", biz.id)
+          .maybeSingle();
+
+        return {
+          business: biz,
+          onboarding: onb as { step: string; completed: boolean } | null,
+        };
+      } catch (err) {
+        console.warn("businessQuery exception:", err);
+        return null;
+      }
     },
   });
 
@@ -127,11 +157,19 @@ function OnboardingRoute() {
     queryKey: ["onboarding-access", businessQuery.data?.business?.id, user?.id],
     enabled: Boolean(businessQuery.data?.business?.id) && Boolean(user?.id),
     queryFn: async () => {
-      const { data, error } = await supabase
-        .rpc("operations_access", { _business_id: businessQuery.data!.business.id })
-        .single();
-      if (error) throw error;
-      return data as OperationsAccess;
+      try {
+        const { data, error } = await supabase
+          .rpc("operations_access", { _business_id: businessQuery.data!.business.id })
+          .single();
+        if (error) {
+          console.warn("accessQuery warning:", error.message);
+          return null;
+        }
+        return data as OperationsAccess;
+      } catch (err) {
+        console.warn("accessQuery exception:", err);
+        return null;
+      }
     },
   });
 
