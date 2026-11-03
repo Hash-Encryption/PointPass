@@ -77,6 +77,7 @@ const saveStepSchema = z.object({
   mainBranchNameEn: z.string().max(120).optional(),
   mainBranchAddressAr: z.string().max(250).optional(),
   mainBranchAddressEn: z.string().max(250).optional(),
+  templateId: z.string().max(250).optional(),
 });
 
 export const saveOnboardingStepFn = createServerFn({ method: "POST" })
@@ -112,6 +113,20 @@ export const saveOnboardingStepFn = createServerFn({ method: "POST" })
 
     if (rpcError) {
       throw new Error(rpcError.message);
+    }
+
+    if (data.templateId || data.offerAr || data.offerEn) {
+      try {
+        const updates: Record<string, unknown> = {};
+        if (data.templateId) updates["template_id"] = data.templateId;
+        if (data.offerAr) updates["offer_ar"] = data.offerAr;
+        if (data.offerEn) updates["offer_en"] = data.offerEn;
+        if (Object.keys(updates).length > 0) {
+          await serverClient.from("businesses").update(updates).eq("id", data.businessId);
+        }
+      } catch (updateErr) {
+        console.warn("Direct business fields update notice:", updateErr);
+      }
     }
 
     return {

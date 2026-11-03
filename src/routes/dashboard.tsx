@@ -133,7 +133,7 @@ function MerchantDashboard() {
     targetStamps: 9,
     sarPerPoint: 10,
     pointsPerReward: 100,
-    progress: 0,
+    progress: 1,
   });
 
   const [pin, setPin] = useState("");
@@ -229,15 +229,15 @@ function MerchantDashboard() {
     setProgram(business.program_type);
     let initialIcon = "⭐";
     let initialStyle: StripStyle = "pizzatown";
-    let initialPreset: WalletColorPreset = "dark";
-    let initialBaseId = "custom";
+    let initialPreset: WalletColorPreset = "green";
+    let initialBaseId = "blank";
 
     if (business.template_id) {
       const meta = parsePassTemplateMeta(business.template_id);
       initialIcon = meta.stampIcon;
       initialStyle = meta.stripStyle;
       initialPreset = meta.colorPreset;
-      initialBaseId = meta.baseId || "custom";
+      initialBaseId = meta.baseId || "blank";
       if (meta.tierMode) {
         setTierMode(meta.tierMode);
       }
@@ -262,7 +262,7 @@ function MerchantDashboard() {
       targetStamps: business.target_stamps ?? 9,
       sarPerPoint: business.sar_per_point ?? 10,
       pointsPerReward: business.points_per_reward,
-      progress: 0,
+      progress: 1,
     });
     setPin("");
     setLat(business.latitude === null ? "" : String(business.latitude));
@@ -389,7 +389,7 @@ function MerchantDashboard() {
       ...d,
       background: tpl.background,
       accent: tpl.accent,
-      headline: ar ? tpl.rewardAr : tpl.rewardEn,
+      headline: tpl.rewardAr,
       headlineEn: tpl.rewardEn,
       targetStamps: tpl.targetStamps,
     }));
@@ -1276,6 +1276,7 @@ function MerchantDashboard() {
                   <PassPreview
                     design={{
                       ...design,
+                      headline: ar ? design.headline : design.headlineEn,
                       background:
                         tierMode === "free"
                           ? WALLET_COLOR_PRESETS[colorPreset].hex
@@ -1288,6 +1289,7 @@ function MerchantDashboard() {
                       stripStyle,
                       tierMode,
                       colorPreset,
+                      progress: design.progress || 1,
                     }}
                     locale={locale}
                   />

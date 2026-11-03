@@ -28,18 +28,8 @@ export type WalletPassState = {
   tierMode?: WalletTierMode | null | undefined;
 };
 
-export function resolveColorPreset(
-  brandColor?: string | null,
-  accentColor?: string | null,
-): WalletColorPreset {
-  const hex =
-    brandColor && /^#[0-9a-fA-F]{6}$/.test(brandColor)
-      ? brandColor
-      : accentColor && /^#[0-9a-fA-F]{6}$/.test(accentColor)
-        ? accentColor
-        : null;
-
-  if (!hex) return "dark";
+function detectPresetFromHex(hex?: string | null): WalletColorPreset | null {
+  if (!hex || !/^#[0-9a-fA-F]{6}$/.test(hex)) return null;
 
   const r = parseInt(hex.slice(1, 3), 16) / 255;
   const g = parseInt(hex.slice(3, 5), 16) / 255;
@@ -51,7 +41,7 @@ export function resolveColorPreset(
   const d = max - min;
 
   // Very dark or achromatic colors map to dark
-  if (l < 0.2 || d < 0.1) return "dark";
+  if (l < 0.12 || d < 0.1) return null;
 
   let h = 0;
   if (max === r) {
@@ -71,6 +61,28 @@ export function resolveColorPreset(
   return "red";
 }
 
+export function resolveColorPreset(
+  brandColor?: string | null,
+  accentColor?: string | null,
+): WalletColorPreset {
+  const fromAccent = detectPresetFromHex(accentColor);
+  const fromBrand = detectPresetFromHex(brandColor);
+
+  // If accentColor has a distinct hue and brandColor is dark/neutral, prioritize accentColor!
+  if (fromAccent) {
+    if (!brandColor || !fromBrand) return fromAccent;
+    const r = parseInt(brandColor.slice(1, 3), 16) / 255;
+    const g = parseInt(brandColor.slice(3, 5), 16) / 255;
+    const b = parseInt(brandColor.slice(5, 7), 16) / 255;
+    const l = (Math.max(r, g, b) + Math.min(r, g, b)) / 2;
+    if (l < 0.35) return fromAccent;
+  }
+
+  if (fromBrand) return fromBrand;
+  if (fromAccent) return fromAccent;
+  return "dark";
+}
+
 /**
  * Builds a 100% Free-tier-compliant pass payload for Apple Wallet and Google Wallet.
  * Features a visual emoji stamp progress bar, header counter, and clean 2-column secondary fields.
@@ -82,6 +94,9 @@ export function buildBaselineWalletPassPayload(state: WalletPassState): Record<s
   const stamps = Math.max(0, state.stamps || 0);
   const emoji = iconToEmoji(state.stampIcon);
   const remainingCount = Math.max(0, target - stamps);
+
+  const rawName = (state.businessName || "Loyalty Pass").trim();
+  const logoText = emoji && !rawName.startsWith(emoji) ? `${emoji} ${rawName}` : rawName;
 
   const colorPreset = state.colorPreset || resolveColorPreset(state.brandColor, state.accentColor);
 
@@ -157,14 +172,15 @@ export function buildBaselineWalletPassPayload(state: WalletPassState): Record<s
       progressValue = "🎁 REWARD UNLOCKED!";
     } else {
       const earned = Array(stamps).fill(emoji);
-      const remaining = Array(remainingCount).fill("⚪");
-      progressValue = [...earned, ...remaining].join(" ");
+      const unclaimedMiddleCount = Math.max(0, target - 1 - stamps);
+      const middle = Array(unclaimedMiddleCount).fill("⚪");
+      progressValue = [...earned, ...middle, "🎁"].join(" ");
     }
 
     primaryFields = [
       {
         key: "stamps_progress",
-        label: "STAMP PROGRESS",
+        label: `STAMP PROGRESS ${emoji}`,
         value: progressValue,
         changeMessage: "You now have %@ stamps",
       },
@@ -195,7 +211,7 @@ export function buildBaselineWalletPassPayload(state: WalletPassState): Record<s
   return {
     barcodeValue: state.serial,
     barcodeFormat: "QR",
-    logoText: state.businessName,
+    logoText,
     description: `Loyalty card for ${state.businessName}`,
     headerFields,
     primaryFields,
@@ -255,10 +271,14 @@ export function buildWalletPassPayload(state: WalletPassState): Record<string, u
     },
   ];
 
+  const emoji = iconToEmoji(state.stampIcon);
+  const rawName = (state.businessName || "Loyalty Pass").trim();
+  const logoText = emoji && !rawName.startsWith(emoji) ? `${emoji} ${rawName}` : rawName;
+
   const payload: Record<string, unknown> = {
     barcodeValue: state.serial,
     barcodeFormat: "QR",
-    logoText: state.businessName,
+    logoText,
     description: `Loyalty card for ${state.businessName}`,
     headerFields,
     backFields,

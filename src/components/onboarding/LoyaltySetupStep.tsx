@@ -35,14 +35,14 @@ export interface CuratedTemplate {
 
 export const CURATED_TEMPLATES: CuratedTemplate[] = [
   {
-    id: "custom",
+    id: "blank",
     labelAr: "من الصفر",
     labelEn: "Blank Slate",
     icon: "⭐",
     pillIcon: "🎨",
-    background: "#121214",
+    background: "#065F46",
     accent: "#10B981",
-    colorPreset: "dark",
+    colorPreset: "green",
     targetStamps: 8,
     rewardAr: "مكافأة خاصة بعد 8 زيارات 🎁",
     rewardEn: "Special reward after 8 visits 🎁",
@@ -58,7 +58,7 @@ export const CURATED_TEMPLATES: CuratedTemplate[] = [
     colorPreset: "orange",
     targetStamps: 7,
     rewardAr: "قهوة مجانية من اختيارك ☕",
-    rewardEn: "Free coffee of your choice ☕",
+    rewardEn: "Free handcrafted coffee ☕",
   },
   {
     id: "burger",
@@ -70,8 +70,8 @@ export const CURATED_TEMPLATES: CuratedTemplate[] = [
     accent: "#EF4444",
     colorPreset: "red",
     targetStamps: 5,
-    rewardAr: "وجبة مجانية من اختيارك 🍔",
-    rewardEn: "Free meal of your choice 🍔",
+    rewardAr: "وجبة برجر مجانية من اختيارك 🍔",
+    rewardEn: "Free burger meal of your choice 🍔",
   },
   {
     id: "bakery",
@@ -83,8 +83,8 @@ export const CURATED_TEMPLATES: CuratedTemplate[] = [
     accent: "#F59E0B",
     colorPreset: "orange",
     targetStamps: 6,
-    rewardAr: "قطعة حلى مجانية 🥐",
-    rewardEn: "Free pastry of your choice 🥐",
+    rewardAr: "قطعة حلى أو مخبوزات مجانية 🥐",
+    rewardEn: "Free pastry or dessert box 🥐",
   },
   {
     id: "salon",
@@ -97,7 +97,7 @@ export const CURATED_TEMPLATES: CuratedTemplate[] = [
     colorPreset: "purple",
     targetStamps: 5,
     rewardAr: "جلسة عناية أو حلاقة مجانية ✂️",
-    rewardEn: "Free grooming or haircut session ✂️",
+    rewardEn: "Free grooming or beauty session ✂️",
   },
   {
     id: "carwash",
@@ -110,7 +110,7 @@ export const CURATED_TEMPLATES: CuratedTemplate[] = [
     colorPreset: "blue",
     targetStamps: 5,
     rewardAr: "غسيل سيارة مجاني شامل 🚗",
-    rewardEn: "Free full car wash 🚗",
+    rewardEn: "Free complete car wash 🚗",
   },
 ];
 
@@ -154,11 +154,11 @@ export function LoyaltySetupStep({
   const ar = locale === "ar";
 
   const [tierMode, setTierMode] = useState<WalletTierMode>(getStoredWalletTier);
-  const [activeTemplateId, setActiveTemplateId] = useState<string>("custom");
+  const [activeTemplateId, setActiveTemplateId] = useState<string>("blank");
   const [program] = useState<ProgramType>(initialProgram);
   const [brandColor, setBrandColor] = useState(initialBrandColor);
   const [accentColor, setAccentColor] = useState(initialAccentColor);
-  const [colorPreset, setColorPreset] = useState<WalletColorPreset>("dark");
+  const [colorPreset, setColorPreset] = useState<WalletColorPreset>("green");
   const [stripStyle, setStripStyle] = useState<StripStyle>("pizzatown");
   const [targetStamps, setTargetStamps] = useState(initialTargetStamps);
   const [stampIcon, setStampIcon] = useState(initialStampIcon);
@@ -205,18 +205,6 @@ export function LoyaltySetupStep({
       const effectiveAccentColor =
         tierMode === "free" ? WALLET_COLOR_PRESETS[colorPreset].accent : accentColor;
 
-      await saveOnboardingStepFn({
-        data: {
-          accessToken: session.access_token,
-          businessId,
-          step: "loyalty",
-          programType: program,
-          brandColor: effectiveBrandColor,
-          accentColor: effectiveAccentColor,
-          targetStamps,
-        },
-      });
-
       // Cross-device template metadata persistence inside template_id
       const metaString = serializePassTemplateMeta({
         baseId: activeTemplateId,
@@ -226,8 +214,30 @@ export function LoyaltySetupStep({
         tierMode,
       });
 
+      await saveOnboardingStepFn({
+        data: {
+          accessToken: session.access_token,
+          businessId,
+          step: "loyalty",
+          programType: program,
+          brandColor: effectiveBrandColor,
+          accentColor: effectiveAccentColor,
+          targetStamps,
+          templateId: metaString,
+          offerAr: suggestedRewardAr,
+          offerEn: suggestedRewardEn,
+        },
+      });
+
       try {
-        await supabase.from("businesses").update({ template_id: metaString }).eq("id", businessId);
+        await supabase
+          .from("businesses")
+          .update({
+            template_id: metaString,
+            offer_ar: suggestedRewardAr,
+            offer_en: suggestedRewardEn,
+          })
+          .eq("id", businessId);
       } catch (err) {
         console.warn("Template meta persistence note:", err);
       }
@@ -311,7 +321,7 @@ export function LoyaltySetupStep({
               targetStamps,
               sarPerPoint: 10,
               pointsPerReward: 100,
-              progress: 2,
+              progress: 1,
               stampIcon,
               stripStyle,
               tierMode,

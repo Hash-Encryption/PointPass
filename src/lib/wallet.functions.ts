@@ -187,64 +187,48 @@ export const createWalletPass = createServerFn({ method: "POST" })
     } | null;
     if (!claim) throw new Error("Pass registration returned no result");
 
-    // Resumed pass with an existing attached wallet: preserve loyalty identity and state
-    if (claim.is_resumed && claim.pass_wallet_serial) {
-      return {
-        ok: true,
-        error: null as string | null,
-        isResumed: true,
-        alreadyEnrolled: true,
-        programType: claim.pass_program_type,
-        stamps: claim.pass_stamps,
-        points: claim.pass_points,
-        morphed: claim.pass_morphed,
-        targetStamps: claim.business_target_stamps,
-        sarPerPoint: claim.business_sar_per_point,
-        pointsPerReward: claim.business_points_per_reward,
-        appleUrl: null as string | null,
-        googleUrl: null as string | null,
-      };
-    }
-
-    // Query business visual branding (colors, logo, template metadata)
+    // Query business visual branding (colors, logo, template metadata, offer texts)
     const { data: biz } = await supabase
       .from("businesses")
-      .select("brand_color,accent_color,logo_url,offer_ar,offer_en,custom_domain")
+      .select("brand_color,accent_color,logo_url,offer_ar,offer_en,custom_domain,template_id")
       .eq("slug", data.slug)
       .maybeSingle();
 
-    let rawTemplateId: string | null = null;
-    try {
-      const { data: tplRow } = await supabase
-        .from("businesses")
-        .select("template_id")
-        .eq("slug", data.slug)
-        .maybeSingle();
-      if (tplRow && (tplRow as { template_id?: string | null }).template_id) {
-        rawTemplateId = (tplRow as { template_id?: string | null }).template_id!;
-      }
-    } catch {
-      // Table column may not exist yet
-    }
-
+    let rawTemplateId: string | null =
+      (biz as { template_id?: string | null })?.template_id ?? null;
     if (!rawTemplateId && biz?.custom_domain?.startsWith("tpl_")) {
       rawTemplateId = biz.custom_domain;
     }
 
     const templateMeta = parsePassTemplateMeta(rawTemplateId);
     const targetStamps = claim.business_target_stamps || 8;
-    const currentStamps = claim.pass_stamps ?? 0;
     const isStampCard =
       claim.pass_program_type === "stamp" || claim.pass_program_type === "coupon_morph";
+    let currentStamps = claim.pass_stamps ?? 0;
+
+    // Start every new or zero-visit pass at 1 pre-filled welcome stamp (1/N)
+    if (isStampCard && currentStamps === 0) {
+      currentStamps = 1;
+      try {
+        await supabase.rpc("grant_welcome_stamp", { _pass_serial: claim.pass_serial });
+      } catch (rpcErr) {
+        try {
+          await supabase
+            .from("pass_instances")
+            .update({ stamps: 1 })
+            .eq("serial", claim.pass_serial);
+        } catch (directErr) {
+          console.warn("Welcome stamp initialization note:", directErr ?? rpcErr);
+        }
+      }
+    }
+
+    const passOffer = biz?.offer_en || biz?.offer_ar || claim.business_offer || "Special Reward";
 
     const icon =
       templateMeta.stampIcon !== "star"
         ? templateMeta.stampIcon
-        : resolveStampIcon(
-            null,
-            biz?.offer_ar || biz?.offer_en || claim.business_offer,
-            biz?.brand_color,
-          );
+        : resolveStampIcon(null, passOffer, biz?.brand_color);
 
     let stripDataUri: string | undefined;
     let stripUrl: string | undefined;
@@ -281,7 +265,7 @@ export const createWalletPass = createServerFn({ method: "POST" })
     const passState: WalletPassState = {
       serial: claim.pass_serial,
       businessName: claim.business_name,
-      offer: claim.business_offer,
+      offer: passOffer,
       programType: claim.pass_program_type,
       stamps: currentStamps,
       points: claim.pass_points ?? 0,
@@ -298,24 +282,51 @@ export const createWalletPass = createServerFn({ method: "POST" })
       tierMode: templateMeta.tierMode,
     };
 
-    let result = await walletFetch("POST", "/passes", buildWalletPassPayload(passState));
+    let result: {
+      ok: boolean;
+      status: number;
+      error: string | null;
+      data: unknown;
+    };
 
-    // Automatic fallback for Free-tier accounts:
-    // If WalletWallet returns 400/403 (e.g. "color/stripURL is only available on the Pro plan"),
-    // retry immediately with baseline free-tier payload so pass generation succeeds 100%.
-    if (
-      !result.ok &&
-      (result.status === 400 ||
-        result.status === 403 ||
-        result.error?.toLowerCase().includes("pro") ||
-        result.error?.toLowerCase().includes("plan"))
-    ) {
-      console.warn(
-        "WalletWallet rich pass rejected, falling back to baseline payload:",
-        result.error,
+    if (claim.pass_wallet_serial) {
+      // Existing attached wallet: update WalletWallet pass via PUT and provide active download links
+      result = await walletFetch(
+        "PUT",
+        `/passes/${encodeURIComponent(claim.pass_wallet_serial)}`,
+        buildWalletPassPayload(passState),
       );
-      result = await walletFetch("POST", "/passes", buildBaselineWalletPassPayload(passState));
+      if (
+        !result.ok &&
+        (result.status === 400 ||
+          result.status === 403 ||
+          result.error?.toLowerCase().includes("pro") ||
+          result.error?.toLowerCase().includes("plan"))
+      ) {
+        result = await walletFetch(
+          "PUT",
+          `/passes/${encodeURIComponent(claim.pass_wallet_serial)}`,
+          buildBaselineWalletPassPayload(passState),
+        );
+      }
+    } else {
+      // Fresh pass: create in WalletWallet via POST
+      result = await walletFetch("POST", "/passes", buildWalletPassPayload(passState));
+      if (
+        !result.ok &&
+        (result.status === 400 ||
+          result.status === 403 ||
+          result.error?.toLowerCase().includes("pro") ||
+          result.error?.toLowerCase().includes("plan"))
+      ) {
+        console.warn(
+          "WalletWallet rich pass rejected, falling back to baseline payload:",
+          result.error,
+        );
+        result = await walletFetch("POST", "/passes", buildBaselineWalletPassPayload(passState));
+      }
     }
+
     if (!result.ok) {
       // Graceful fallback so the claim flow stays usable while credentials pend.
       return {
@@ -324,7 +335,7 @@ export const createWalletPass = createServerFn({ method: "POST" })
         isResumed: claim.is_resumed,
         alreadyEnrolled: false,
         programType: claim.pass_program_type,
-        stamps: claim.pass_stamps,
+        stamps: currentStamps,
         points: claim.pass_points,
         morphed: claim.pass_morphed,
         targetStamps: claim.business_target_stamps,
@@ -334,34 +345,43 @@ export const createWalletPass = createServerFn({ method: "POST" })
         googleUrl: null as string | null,
       };
     }
+
     const payload = result.data as {
       serialNumber?: string;
       googleSaveUrl?: string;
       shareUrl?: string;
-    };
-    if (!payload.serialNumber || !payload.shareUrl) {
-      return {
-        ok: false,
-        error: "WalletWallet returned an incomplete pass response",
-        isResumed: claim.is_resumed,
-        alreadyEnrolled: false,
-        programType: claim.pass_program_type,
-        stamps: claim.pass_stamps,
-        points: claim.pass_points,
-        morphed: claim.pass_morphed,
-        targetStamps: claim.business_target_stamps,
-        sarPerPoint: claim.business_sar_per_point,
-        pointsPerReward: claim.business_points_per_reward,
-        appleUrl: null,
-        googleUrl: null,
-      };
+    } | null;
+
+    if (!claim.pass_wallet_serial) {
+      if (!payload?.serialNumber || !payload?.shareUrl) {
+        return {
+          ok: false,
+          error: "WalletWallet returned an incomplete pass response",
+          isResumed: claim.is_resumed,
+          alreadyEnrolled: false,
+          programType: claim.pass_program_type,
+          stamps: currentStamps,
+          points: claim.pass_points,
+          morphed: claim.pass_morphed,
+          targetStamps: claim.business_target_stamps,
+          sarPerPoint: claim.business_sar_per_point,
+          pointsPerReward: claim.business_points_per_reward,
+          appleUrl: null,
+          googleUrl: null,
+        };
+      }
+
+      const { error: attachError } = await supabase.rpc("attach_wallet_serial", {
+        _pass_serial: claim.pass_serial,
+        _wallet_serial: payload.serialNumber,
+      });
+      if (attachError) throw new Error(attachError.message);
     }
 
-    const { error: attachError } = await supabase.rpc("attach_wallet_serial", {
-      _pass_serial: claim.pass_serial,
-      _wallet_serial: payload.serialNumber,
-    });
-    if (attachError) throw new Error(attachError.message);
+    const shareUrl =
+      payload?.shareUrl ||
+      (claim.pass_wallet_serial ? `https://walletwallet.dev/p/${claim.pass_wallet_serial}` : null);
+    const googleUrl = payload?.googleSaveUrl ?? shareUrl;
 
     return {
       ok: true,
@@ -369,14 +389,14 @@ export const createWalletPass = createServerFn({ method: "POST" })
       isResumed: claim.is_resumed,
       alreadyEnrolled: false,
       programType: claim.pass_program_type,
-      stamps: claim.pass_stamps,
+      stamps: currentStamps,
       points: claim.pass_points,
       morphed: claim.pass_morphed,
       targetStamps: claim.business_target_stamps,
       sarPerPoint: claim.business_sar_per_point,
       pointsPerReward: claim.business_points_per_reward,
-      appleUrl: payload.shareUrl,
-      googleUrl: payload.googleSaveUrl ?? payload.shareUrl,
+      appleUrl: shareUrl,
+      googleUrl,
     };
   });
 

@@ -116,6 +116,13 @@ assert.equal(resolveColorPreset("#d97706"), "orange");
 assert.equal(resolveColorPreset("#7c3aed"), "purple");
 assert.equal(resolveColorPreset(null, null), "dark");
 
+// Assert curated dark template hexes with vibrant accents resolve to their vibrant color presets
+assert.equal(resolveColorPreset("#18181B", "#EF4444"), "red");
+assert.equal(resolveColorPreset("#082F49", "#06B6D4"), "blue");
+assert.equal(resolveColorPreset("#1A1412", "#D97706"), "orange");
+assert.equal(resolveColorPreset("#0F172A", "#8B5CF6"), "purple");
+assert.equal(resolveColorPreset("#121214", "#10B981"), "green");
+
 // Assert baseline fallback payload has 100% Free-tier compatibility with Emoji Progress Bar
 const baseline = buildBaselineWalletPassPayload({
   serial: "free-pass-1",
@@ -142,16 +149,38 @@ assert.equal(baseline.logoURL, undefined, "Baseline payload must not contain log
 // Free-compatible properties MUST be present
 assert.equal(baseline.barcodeValue, "free-pass-1");
 assert.equal(baseline.barcodeFormat, "QR");
-assert.equal(baseline.logoText, "Free Tier Business");
-assert.equal(baseline.colorPreset, "dark");
+assert.equal(baseline.logoText, "🍔 Free Tier Business");
+assert.equal(baseline.colorPreset, "green");
 assert.equal(baseline.headerFields[0].label, "STAMPS");
 assert.equal(baseline.headerFields[0].value, "2/6");
-assert.equal(baseline.primaryFields[0].label, "STAMP PROGRESS");
-assert.equal(baseline.primaryFields[0].value, "🍔 🍔 ⚪ ⚪ ⚪ ⚪");
+assert.equal(baseline.primaryFields[0].label, "STAMP PROGRESS 🍔");
+assert.equal(baseline.primaryFields[0].value, "🍔 🍔 ⚪ ⚪ ⚪ 🎁");
 assert.equal(baseline.secondaryFields[0].label, "REMAINING");
 assert.equal(baseline.secondaryFields[0].value, "4 left");
 assert.equal(baseline.secondaryFields[1].label, "REWARD");
 assert.equal(baseline.secondaryFields[1].value, "Buy 5 Get 1");
+
+// Welcome stamp state: 1/5 with Burger
+const welcomePass = buildBaselineWalletPassPayload({
+  serial: "welcome-1",
+  businessName: "Burger Bistro",
+  offer: "Free burger meal of your choice 🍔",
+  programType: "stamp",
+  stamps: 1,
+  points: 0,
+  morphed: false,
+  targetStamps: 5,
+  brandColor: "#18181B",
+  accentColor: "#EF4444",
+  stampIcon: "🍔",
+});
+assert.equal(welcomePass.logoText, "🍔 Burger Bistro");
+assert.equal(welcomePass.colorPreset, "red");
+assert.equal(welcomePass.headerFields[0].value, "1/5");
+assert.equal(welcomePass.primaryFields[0].label, "STAMP PROGRESS 🍔");
+assert.equal(welcomePass.primaryFields[0].value, "🍔 ⚪ ⚪ ⚪ 🎁");
+assert.equal(welcomePass.secondaryFields[0].value, "4 left");
+assert.equal(welcomePass.secondaryFields[1].value, "Free burger meal of your choice 🍔");
 
 // Reward unlocked baseline state
 const unlockedBaseline = buildBaselineWalletPassPayload({

@@ -47,11 +47,11 @@ export function designFromTemplate(tpl: PassTemplate, program: ProgramType): Pas
     targetStamps: tpl.program.targetStamps ?? 8,
     sarPerPoint: tpl.program.sarPerPoint ?? 10,
     pointsPerReward: tpl.program.pointsPerReward ?? 100,
-    progress: 2,
+    progress: 1,
     stampIcon: "⭐",
     stripStyle: "pizzatown",
     tierMode: "free",
-    colorPreset: "dark",
+    colorPreset: "green",
   };
 }
 
@@ -71,10 +71,12 @@ function PassBody({
       : design.background;
 
   const fg = autoContrast(presetHex);
-  const name =
+  const rawName =
     locale === "ar"
       ? design.businessName || design.businessNameEn || "متجرك"
       : design.businessNameEn || design.businessName || "Your Store";
+  const emoji = iconToEmoji(design.stampIcon || "⭐");
+  const name = emoji && !rawName.startsWith(emoji) ? `${emoji} ${rawName}` : rawName;
   const headline =
     locale === "ar"
       ? design.headline || "مكافأة بعد اكتمال الأختام"
@@ -82,7 +84,6 @@ function PassBody({
 
   const target = Math.max(1, design.targetStamps || 8);
   const current = Math.max(0, Math.min(design.progress || 0, target));
-  const emoji = iconToEmoji(design.stampIcon || "⭐");
   const remaining = Math.max(0, target - current);
 
   // Generate Pro Retina Strip Data URI if in Pro Mode
@@ -193,7 +194,7 @@ function PassBody({
               }}
             >
               <div className="flex items-center justify-between text-[10px] font-semibold tracking-wider opacity-75">
-                <span>{locale === "ar" ? "شريط الأختام المكتملة" : "STAMP PROGRESS"}</span>
+                <span>{locale === "ar" ? `شريط الأختام ${emoji}` : `STAMP PROGRESS ${emoji}`}</span>
                 <span className="font-mono text-[10px]">
                   {current} / {target}
                 </span>
@@ -201,6 +202,8 @@ function PassBody({
               <div className="flex flex-wrap items-center gap-2 py-1 select-none">
                 {Array.from({ length: target }).map((_, i) => {
                   const isStamped = i < current;
+                  const isFinal = i === target - 1;
+                  const icon = isStamped ? emoji : isFinal ? "🎁" : "⚪";
                   return (
                     <button
                       type="button"
@@ -213,7 +216,7 @@ function PassBody({
                           : "cursor-default"
                       }`}
                     >
-                      {isStamped ? emoji : "⚪"}
+                      {icon}
                     </button>
                   );
                 })}

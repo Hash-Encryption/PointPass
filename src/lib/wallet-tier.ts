@@ -101,10 +101,10 @@ export function serializePassTemplateMeta(params: {
   colorPreset?: WalletColorPreset | null | undefined;
   tierMode?: WalletTierMode | null | undefined;
 }): string {
-  const base = params.baseId?.trim() || "custom";
+  const base = params.baseId?.trim() || "blank";
   const icon = emojiToIcon(params.stampIcon || "star");
   const style: StripStyle = params.stripStyle || "pizzatown";
-  const preset: WalletColorPreset = params.colorPreset || "dark";
+  const preset: WalletColorPreset = params.colorPreset || "green";
   const tier: WalletTierMode = params.tierMode === "pro" ? "pro" : "free";
 
   return `${base}__icon-${icon}__style-${style}__preset-${preset}__tier-${tier}`;
@@ -113,21 +113,21 @@ export function serializePassTemplateMeta(params: {
 export function parsePassTemplateMeta(templateId?: string | null): PassTemplateMeta {
   if (!templateId || typeof templateId !== "string") {
     return {
-      baseId: "custom",
+      baseId: "blank",
       stampIcon: "star",
       stripStyle: "pizzatown",
-      colorPreset: "dark",
+      colorPreset: "green",
       tierMode: "free",
     };
   }
 
   const raw = templateId.trim();
   const parts = raw.split("__");
-  const baseId = parts[0] || "custom";
+  const baseId = parts[0] || "blank";
 
   let stampIcon = "star";
   let stripStyle: StripStyle = "pizzatown";
-  let colorPreset: WalletColorPreset = "dark";
+  let colorPreset: WalletColorPreset = "green";
   let tierMode: WalletTierMode = "free";
 
   for (const part of parts.slice(1)) {
@@ -175,6 +175,9 @@ export function parsePassTemplateMeta(templateId?: string | null): PassTemplateM
     } else if (baseId.includes("car")) {
       stampIcon = "car";
       colorPreset = "blue";
+    } else if (baseId.includes("blank") || baseId.includes("custom")) {
+      stampIcon = "star";
+      colorPreset = "green";
     }
   }
 
