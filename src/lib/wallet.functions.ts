@@ -3,7 +3,7 @@ import { getRequestIP, getRequestHeader } from "@tanstack/react-start/server";
 import { z } from "zod";
 // @ts-expect-error Cloudflare supplies this runtime module to Pages Functions.
 import { env } from "cloudflare:workers";
-import { createServerSupabaseClient } from "@/lib/server-supabase";
+import { createServerSupabaseClient, createAdminSupabaseClient } from "@/lib/server-supabase";
 import {
   buildBaselineWalletPassPayload,
   buildWalletPassPayload,
@@ -721,23 +721,150 @@ export const updateWalletPass = createServerFn({ method: "POST" })
     };
   });
 
+function normalizeScannedQuery(raw: string): string {
+  const trimmed = raw.trim();
+  try {
+    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+      const url = new URL(trimmed);
+      const fromParam = url.searchParams.get("serial") || url.searchParams.get("pass");
+      if (fromParam) return fromParam.trim();
+      const segments = url.pathname.split("/").filter(Boolean);
+      const last = segments[segments.length - 1];
+      if (last && (last.startsWith("PP-") || last.length > 5)) {
+        return last.trim();
+      }
+    }
+  } catch {
+    // not URL
+  }
+  const match = trimmed.match(/PP-[A-Za-z0-9_-]+/i);
+  if (match) return match[0];
+  return trimmed;
+}
+
 const lookupCustomerSchema = z.object({
   slug: z.string().min(1).max(64),
-  query: z.string().min(1).max(128),
+  query: z.string().min(1).max(256),
+  cashierSession: z.string().regex(/^[a-f0-9]{64}$/).optional().nullable(),
 });
 
 export const lookupCustomerPass = createServerFn({ method: "POST" })
   .validator((d: unknown) => lookupCustomerSchema.parse(d))
   .handler(async ({ data }) => {
     const supabase = createServerSupabaseClient();
-    const query = data.query.trim();
-    const isPhone = /^[0-9+() -]{6,20}$/.test(query);
+    const cleanQuery = normalizeScannedQuery(data.query);
+    const isPhone =
+      /^[0-9+() -]{6,20}$/.test(cleanQuery) && !cleanQuery.toUpperCase().startsWith("PP-");
 
+    // 1. Try Service Role Admin Client if configured
+    const admin = createAdminSupabaseClient();
+    if (admin) {
+      try {
+        let passQuery = admin
+          .from("pass_instances")
+          .select(`
+            serial,
+            stamps,
+            points,
+            morphed,
+            program_type,
+            wallet_serial,
+            phone,
+            created_at,
+            businesses!inner(id, slug, name_ar, name_en, offer_ar, offer_en, target_stamps)
+          `)
+          .eq("businesses.slug", data.slug);
+
+        if (isPhone) {
+          const digitsOnly = cleanQuery.replace(/[^0-9]/g, "");
+          passQuery = passQuery.or(`phone.eq.${cleanQuery},phone.ilike.%${digitsOnly.slice(-9)}%`);
+        } else {
+          passQuery = passQuery.or(`serial.eq.${cleanQuery},wallet_serial.eq.${cleanQuery}`);
+        }
+
+        const { data: passRow } = await passQuery.limit(1).maybeSingle();
+        if (passRow) {
+          const bizRow = passRow.businesses as unknown as {
+            target_stamps?: number;
+            offer_en?: string;
+            offer_ar?: string;
+          };
+
+          const { count: redeemCount } = await admin
+            .from("pass_transactions")
+            .select("id", { count: "exact", head: true })
+            .eq("pass_serial", passRow.serial)
+            .eq("action", "redeem");
+
+          const currentStamps = Math.max(1, passRow.stamps ?? 1);
+          return {
+            ok: true as const,
+            found: true as const,
+            serial: passRow.serial,
+            phone: passRow.phone,
+            stamps: currentStamps,
+            points: passRow.points ?? 0,
+            targetStamps: bizRow?.target_stamps || 8,
+            programType: passRow.program_type as "stamp" | "points" | "coupon_morph",
+            morphed: passRow.morphed ?? false,
+            offer: bizRow?.offer_en || bizRow?.offer_ar || "Special Reward",
+            customerName: passRow.phone
+              ? `Customer (${passRow.phone.slice(-4)})`
+              : "Loyalty Member",
+            rewardsRedeemed: redeemCount ?? 0,
+            totalStamps: currentStamps,
+            isNew: false,
+          };
+        }
+      } catch (adminErr) {
+        console.warn("Admin pass lookup note:", adminErr);
+      }
+    }
+
+    // 2. Try cashier_lookup_pass RPC (SECURITY DEFINER)
+    try {
+      const { data: rpcPass, error: rpcError } = await supabase
+        .rpc("cashier_lookup_pass", {
+          _slug: data.slug,
+          _query: cleanQuery,
+          _session_token: data.cashierSession ?? null,
+        })
+        .maybeSingle();
+
+      if (!rpcError && rpcPass) {
+        const p = rpcPass as Record<string, unknown>;
+        const currentStamps = Math.max(1, (p["pass_stamps"] as number) ?? 1);
+        return {
+          ok: true as const,
+          found: true as const,
+          serial: (p["pass_serial"] as string) || cleanQuery,
+          phone: (p["customer_phone"] as string) || null,
+          stamps: currentStamps,
+          points: (p["pass_points"] as number) ?? 0,
+          targetStamps: (p["business_target_stamps"] as number) || 8,
+          programType: (p["program_type"] as "stamp" | "points" | "coupon_morph") || "stamp",
+          morphed: Boolean(p["pass_morphed"]),
+          offer: (p["business_offer"] as string) || "Special Reward",
+          customerName:
+            (p["customer_name"] as string) ||
+            (p["customer_phone"]
+              ? `Customer (${String(p["customer_phone"]).slice(-4)})`
+              : "Loyalty Member"),
+          rewardsRedeemed: (p["rewards_redeemed"] as number) || 0,
+          totalStamps: (p["total_stamps"] as number) || currentStamps,
+          isNew: false,
+        };
+      }
+    } catch {
+      // RPC may not be installed yet, proceed
+    }
+
+    // 3. If query is a phone number, resolve via claim_public_pass RPC
     if (isPhone) {
       const { data: claimData, error: claimError } = await supabase
         .rpc("claim_public_pass", {
           _slug: data.slug,
-          _phone: query,
+          _phone: cleanQuery,
         })
         .single();
 
@@ -754,34 +881,176 @@ export const lookupCustomerPass = createServerFn({ method: "POST" })
           pass_wallet_serial: string | null;
           is_resumed: boolean;
         };
+        const currentStamps = Math.max(1, claim.pass_stamps ?? 1);
         return {
           ok: true as const,
           found: true as const,
           serial: claim.pass_serial,
-          phone: query,
-          stamps: claim.pass_stamps ?? 0,
+          phone: cleanQuery,
+          stamps: currentStamps,
           points: claim.pass_points ?? 0,
           targetStamps: claim.business_target_stamps || 8,
           programType: claim.pass_program_type,
           morphed: claim.pass_morphed,
-          offer: claim.business_offer,
+          offer: claim.business_offer || "Special Reward",
+          customerName: `Customer (${cleanQuery.slice(-4)})`,
+          rewardsRedeemed: 0,
+          totalStamps: currentStamps,
           isNew: !claim.is_resumed,
         };
       }
     }
 
+    // 4. Guaranteed welcome stamp default: every PointPass starts with 1 welcome stamp
     return {
       ok: true as const,
       found: false as const,
-      serial: query,
+      serial: cleanQuery,
       phone: null,
-      stamps: 0,
+      stamps: 1, // Welcome stamp guarantee (never 0/N on initial scan)
       points: 0,
       targetStamps: 8,
       programType: "stamp" as const,
       morphed: false,
       offer: "",
+      customerName: "Loyalty Member",
+      rewardsRedeemed: 0,
+      totalStamps: 1,
       isNew: false,
+    };
+  });
+
+const unlockTerminalSchema = z.object({
+  slug: z.string().min(1).max(64),
+  cashierName: z.string().trim().min(1).max(100),
+  pin: z.string().regex(/^[0-9]{4}$/),
+  deviceName: z.string().max(120).optional().nullable(),
+});
+
+export const unlockCashierTerminal = createServerFn({ method: "POST" })
+  .validator((d: unknown) => unlockTerminalSchema.parse(d))
+  .handler(async ({ data }) => {
+    const supabase = createServerSupabaseClient();
+    const cleanSlug = data.slug.trim().toLowerCase();
+    const cleanName = data.cashierName.trim();
+    const pin = data.pin;
+
+    // Check 1: Individual Cashier PIN
+    try {
+      const { data: staffMembers } = await supabase
+        .from("staff_members")
+        .select(`
+          id,
+          name_ar,
+          name_en,
+          code,
+          business:businesses!inner(id, slug),
+          assignments:staff_branch_assignments(
+            branch:branches(id, code, name_ar, name_en)
+          )
+        `)
+        .eq("business.slug", cleanSlug)
+        .eq("status", "active");
+
+      if (staffMembers && staffMembers.length > 0) {
+        const matchingStaff = staffMembers.find((s) => {
+          const nameAr = ((s as { name_ar?: string | null }).name_ar || "").toLowerCase();
+          const nameEn = ((s as { name_en?: string | null }).name_en || "").toLowerCase();
+          const code = ((s as { code?: string | null }).code || "").toLowerCase();
+          const target = cleanName.toLowerCase();
+          return (
+            nameAr === target ||
+            nameEn === target ||
+            code === target ||
+            nameAr.includes(target) ||
+            nameEn.includes(target)
+          );
+        });
+
+        if (matchingStaff) {
+          const assignment = (
+            matchingStaff.assignments as Array<{ branch?: { code?: string } }>
+          )?.[0];
+          const branchCode = assignment?.branch?.code;
+          if (branchCode && matchingStaff.code) {
+            const { data: staffUnlock, error: staffError } = await supabase
+              .rpc("cashier_unlock_staff", {
+                _slug: cleanSlug,
+                _branch_code: branchCode,
+                _staff_code: matchingStaff.code,
+                _pin: pin,
+                _device_name: data.deviceName || cleanName,
+              })
+              .maybeSingle();
+
+            if (!staffError && staffUnlock) {
+              const res = staffUnlock as Record<string, unknown>;
+              return {
+                ok: true as const,
+                mode: "staff" as const,
+                business_id: res["business_id"] as string,
+                business_slug: res["business_slug"] as string,
+                name_ar: res["name_ar"] as string,
+                name_en: res["name_en"] as string,
+                branch_name_ar: res["branch_name_ar"] as string | undefined,
+                branch_name_en: res["branch_name_en"] as string | undefined,
+                staff_name_ar: (res["staff_name_ar"] as string) || cleanName,
+                staff_name_en: (res["staff_name_en"] as string) || cleanName,
+                cashier_session: res["cashier_session"] as string,
+                session_expires_at: res["session_expires_at"] as string,
+                cashier_name: cleanName,
+                error: null as string | null,
+              };
+            }
+          }
+        }
+      }
+    } catch {
+      // Proceed to Global PIN check
+    }
+
+    // Check 2: Global Business PIN (cashier_unlock)
+    const { data: globalUnlock, error: globalError } = await supabase
+      .rpc("cashier_unlock", {
+        _slug: cleanSlug,
+        _pin: pin,
+      })
+      .maybeSingle();
+
+    if (!globalError && globalUnlock) {
+      const res = globalUnlock as Record<string, unknown>;
+      return {
+        ok: true as const,
+        mode: "global" as const,
+        business_id: res["business_id"] as string,
+        business_slug: res["business_slug"] as string,
+        name_ar: res["name_ar"] as string,
+        name_en: res["name_en"] as string,
+        branch_name_ar: undefined,
+        branch_name_en: undefined,
+        staff_name_ar: cleanName,
+        staff_name_en: cleanName,
+        cashier_session: res["cashier_session"] as string,
+        session_expires_at: res["session_expires_at"] as string,
+        cashier_name: cleanName,
+        error: null as string | null,
+      };
+    }
+
+    return {
+      ok: false as const,
+      error: "Incorrect business slug or cashier PIN",
+      business_id: null,
+      business_slug: null,
+      name_ar: null,
+      name_en: null,
+      branch_name_ar: undefined,
+      branch_name_en: undefined,
+      staff_name_ar: null,
+      staff_name_en: null,
+      cashier_session: null,
+      session_expires_at: null,
+      cashier_name: null,
     };
   });
 

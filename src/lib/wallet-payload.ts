@@ -85,7 +85,7 @@ export function resolveColorPreset(
 
 /**
  * Builds a 100% Free-tier-compliant pass payload for Apple Wallet and Google Wallet.
- * Features a visual emoji stamp progress bar, header counter, and clean 2-column secondary fields.
+ * Features a visual emoji stamp progress bar, header counter, visible serial code, and clean 2-column secondary fields.
  */
 export function buildBaselineWalletPassPayload(state: WalletPassState): Record<string, unknown> {
   const isPoints = state.programType === "points";
@@ -200,22 +200,37 @@ export function buildBaselineWalletPassPayload(state: WalletPassState): Record<s
     ];
   }
 
+  const auxiliaryFields = [
+    {
+      key: "pass_code",
+      label: "PASS CODE",
+      value: state.serial,
+    },
+  ];
+
   const backFields = [
     {
       label: "NOTIFICATIONS",
       value: state.notification ?? " ",
       changeMessage: "%@",
     },
+    {
+      label: "PASS SERIAL",
+      value: state.serial,
+    },
   ];
 
   return {
     barcodeValue: state.serial,
+    barcodeAltText: state.serial,
+    altText: state.serial,
     barcodeFormat: "QR",
     logoText,
     description: `Loyalty card for ${state.businessName}`,
     headerFields,
     primaryFields,
     secondaryFields,
+    auxiliaryFields,
     backFields,
     colorPreset,
   };
@@ -263,11 +278,23 @@ export function buildWalletPassPayload(state: WalletPassState): Record<string, u
       ]
     : [];
 
+  const auxiliaryFields = [
+    {
+      key: "pass_code",
+      label: "PASS CODE",
+      value: state.serial,
+    },
+  ];
+
   const backFields = [
     {
       label: "NOTIFICATIONS",
       value: state.notification ?? " ",
       changeMessage: "%@",
+    },
+    {
+      label: "PASS SERIAL",
+      value: state.serial,
     },
   ];
 
@@ -277,10 +304,13 @@ export function buildWalletPassPayload(state: WalletPassState): Record<string, u
 
   const payload: Record<string, unknown> = {
     barcodeValue: state.serial,
+    barcodeAltText: state.serial,
+    altText: state.serial,
     barcodeFormat: "QR",
     logoText,
     description: `Loyalty card for ${state.businessName}`,
     headerFields,
+    auxiliaryFields,
     backFields,
     colorPreset: state.colorPreset || resolveColorPreset(state.brandColor, state.accentColor),
   };

@@ -24,7 +24,11 @@ import {
 } from "lucide-react";
 import { useLocale } from "@/lib/i18n";
 import { supabase } from "@/lib/supabase";
-import { lookupCustomerPass, updateWalletPass } from "@/lib/wallet.functions";
+import {
+  lookupCustomerPass,
+  updateWalletPass,
+  unlockCashierTerminal,
+} from "@/lib/wallet.functions";
 import { iconToEmoji, parsePassTemplateMeta, type PassTemplateMeta } from "@/lib/wallet-tier";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -58,25 +62,13 @@ type BusinessInfo = {
   branch_name_en?: string | undefined;
   staff_name_ar?: string | undefined;
   staff_name_en?: string | undefined;
+  cashier_name?: string | undefined;
   template_id?: string | null | undefined;
   brand_color?: string | null | undefined;
   accent_color?: string | null | undefined;
   offer_ar?: string | null | undefined;
   offer_en?: string | null | undefined;
   target_stamps?: number | undefined;
-};
-
-type UnlockResult = {
-  business_id: string;
-  business_slug: string;
-  name_ar: string;
-  name_en: string;
-  branch_name_ar?: string | undefined;
-  branch_name_en?: string | undefined;
-  staff_name_ar?: string | undefined;
-  staff_name_en?: string | undefined;
-  cashier_session: string;
-  session_expires_at: string;
 };
 
 type ActivePassSheet = {
@@ -88,6 +80,9 @@ type ActivePassSheet = {
   programType: "stamp" | "points" | "coupon_morph";
   morphed: boolean;
   offer: string;
+  customerName?: string | undefined;
+  rewardsRedeemed?: number | undefined;
+  totalStamps?: number | undefined;
   justUpdated?: boolean | undefined;
   walletSynced?: boolean | undefined;
   actionMessage?: string | undefined;
@@ -216,7 +211,7 @@ export function CashierTerminal() {
   const { locale, toggle } = useLocale();
   const ar = locale === "ar";
 
-  // Login & Setup State
+  // Login & Setup State: 3 Simple Fields (Slug, Cashier Name, PIN)
   const [slug, setSlug] = useState(() => {
     if (typeof window !== "undefined") {
       const p = new URLSearchParams(window.location.search);
@@ -227,29 +222,14 @@ export function CashierTerminal() {
     return "";
   });
 
+  const [cashierName, setCashierName] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("cashier_last_name") ?? "";
+    }
+    return "";
+  });
+
   const [pin, setPin] = useState("");
-  const [branchCode, setBranchCode] = useState(() => {
-    if (typeof window !== "undefined") {
-      const p = new URLSearchParams(window.location.search);
-      const b = p.get("branch");
-      if (b) return b.trim().toLowerCase();
-      return localStorage.getItem("cashier_last_branch") ?? "";
-    }
-    return "";
-  });
-  const [staffCode, setStaffCode] = useState(() => {
-    if (typeof window !== "undefined") {
-      const p = new URLSearchParams(window.location.search);
-      const st = p.get("staff");
-      if (st) return st.trim().toLowerCase();
-      return localStorage.getItem("cashier_last_staff") ?? "";
-    }
-    return "";
-  });
-  const [deviceName, setDeviceName] = useState(() =>
-    typeof window === "undefined" ? "" : (localStorage.getItem("cashier_device_name") ?? ""),
-  );
-  const [showManualSetup, setShowManualSetup] = useState(false);
   const [authenticating, setAuthenticating] = useState(false);
 
   // Active POS Session State
@@ -282,11 +262,7 @@ export function CashierTerminal() {
     if (typeof window !== "undefined") {
       const p = new URLSearchParams(window.location.search);
       const s = p.get("slug");
-      const b = p.get("branch");
-      const st = p.get("staff");
       if (s) setSlug(s.trim().toLowerCase());
-      if (b) setBranchCode(b.trim().toLowerCase());
-      if (st) setStaffCode(st.trim().toLowerCase());
     }
   }, []);
 
@@ -347,37 +323,112 @@ export function CashierTerminal() {
   async function unlockTerminal(e?: React.FormEvent) {
     if (e) e.preventDefault();
     const cleanSlug = slug.trim().toLowerCase();
+    const cleanName = cashierName.trim();
 
     if (!cleanSlug) {
-      toast.error(ar ? "يرجى كتابة اسم/معرّف المطعم (Slug)" : "Please enter business slug");
+      toast.error(ar ? "يرجى كتابة اسم/معرّف المنشأة (Slug)" : "Please enter business slug");
+      return;
+    }
+    if (!cleanName) {
+      toast.error(ar ? "يرجى كتابة اسم الكاشير" : "Please enter cashier name");
       return;
     }
     if (pin.length !== 4) {
       toast.error(ar ? "أدخل رمز PIN المكون من 4 أرقام" : "Enter 4-digit PIN");
       return;
     }
-    if (Boolean(branchCode) !== Boolean(staffCode)) {
-      toast.error(ar ? "أدخل رمز الفرع ورمز الموظف معاً" : "Enter both branch code and staff code");
-      return;
-    }
 
     setAuthenticating(true);
     try {
-      const { data, error } = branchCode
-        ? await supabase
-            .rpc("cashier_unlock_staff", {
-              _slug: cleanSlug,
-              _branch_code: branchCode,
-              _staff_code: staffCode,
-              _pin: pin,
-              _device_name: deviceName || null,
-            })
-            .maybeSingle()
-        : await supabase.rpc("cashier_unlock", { _slug: cleanSlug, _pin: pin }).maybeSingle();
+      // Smart Dual-PIN Verification (Individual Cashier PIN first, Global Business PIN second)
+      let unlockData: {
+        business_id: string;
+        business_slug: string;
+        name_ar: string;
+        name_en: string;
+        branch_name_ar?: string | undefined;
+        branch_name_en?: string | undefined;
+        staff_name_ar?: string | undefined;
+        staff_name_en?: string | undefined;
+        cashier_session: string;
+        session_expires_at: string;
+        cashier_name?: string | undefined;
+      } | null = null;
 
-      const biz = data as UnlockResult | null;
+      try {
+        const res = await unlockCashierTerminal({
+          data: {
+            slug: cleanSlug,
+            cashierName: cleanName,
+            pin,
+          },
+        });
+        if (res.ok && res.business_id && res.cashier_session) {
+          unlockData = {
+            business_id: res.business_id,
+            business_slug: res.business_slug,
+            name_ar: res.name_ar,
+            name_en: res.name_en,
+            branch_name_ar: res.branch_name_ar,
+            branch_name_en: res.branch_name_en,
+            staff_name_ar: res.staff_name_ar,
+            staff_name_en: res.staff_name_en,
+            cashier_session: res.cashier_session,
+            session_expires_at: res.session_expires_at,
+            cashier_name: cleanName,
+          };
+        }
+      } catch {
+        // Direct RPC fallback if server function unreachable
+      }
 
-      if (error || !biz) {
+      // Preserved direct RPC fallback (supports both cashier_unlock and cashier_unlock_staff)
+      if (!unlockData) {
+        const { data: directData } = await supabase
+          .rpc("cashier_unlock", { _slug: cleanSlug, _pin: pin })
+          .maybeSingle();
+
+        if (directData) {
+          const biz = directData as Record<string, unknown>;
+          unlockData = {
+            business_id: biz["business_id"] as string,
+            business_slug: biz["business_slug"] as string,
+            name_ar: biz["name_ar"] as string,
+            name_en: biz["name_en"] as string,
+            cashier_session: biz["cashier_session"] as string,
+            session_expires_at: biz["session_expires_at"] as string,
+            cashier_name: cleanName,
+          };
+        } else {
+          // Check staff RPC if configured
+          try {
+            const { data: staffData } = await supabase
+              .rpc("cashier_unlock_staff", {
+                _slug: cleanSlug,
+                _branch_code: "main",
+                _staff_code: cleanName.toLowerCase(),
+                _pin: pin,
+              })
+              .maybeSingle();
+            if (staffData) {
+              const sBiz = staffData as Record<string, unknown>;
+              unlockData = {
+                business_id: sBiz["business_id"] as string,
+                business_slug: sBiz["business_slug"] as string,
+                name_ar: sBiz["name_ar"] as string,
+                name_en: sBiz["name_en"] as string,
+                cashier_session: sBiz["cashier_session"] as string,
+                session_expires_at: sBiz["session_expires_at"] as string,
+                cashier_name: cleanName,
+              };
+            }
+          } catch {
+            // Ignore
+          }
+        }
+      }
+
+      if (!unlockData) {
         playPOSChime("error");
         toast.error(
           ar ? "اسم المنشأة أو رمز PIN غير صحيح" : "Incorrect business slug or cashier PIN",
@@ -386,12 +437,10 @@ export function CashierTerminal() {
         return;
       }
 
+      const res = unlockData;
+
       localStorage.setItem("cashier_last_slug", cleanSlug);
-      if (branchCode) {
-        localStorage.setItem("cashier_last_branch", branchCode);
-        localStorage.setItem("cashier_last_staff", staffCode);
-        localStorage.setItem("cashier_device_name", deviceName);
-      }
+      localStorage.setItem("cashier_last_name", cleanName);
 
       // Query template metadata and branding for live terminal display
       const branding = await loadBusinessBranding(cleanSlug);
@@ -399,14 +448,15 @@ export function CashierTerminal() {
       setTemplateMeta(parsedMeta);
 
       setBusiness({
-        business_id: biz.business_id,
-        business_slug: biz.business_slug,
-        name_ar: biz.name_ar,
-        name_en: biz.name_en,
-        branch_name_ar: biz.branch_name_ar,
-        branch_name_en: biz.branch_name_en,
-        staff_name_ar: biz.staff_name_ar,
-        staff_name_en: biz.staff_name_en,
+        business_id: res.business_id,
+        business_slug: res.business_slug,
+        name_ar: res.name_ar,
+        name_en: res.name_en,
+        branch_name_ar: res.branch_name_ar,
+        branch_name_en: res.branch_name_en,
+        staff_name_ar: res.staff_name_ar || cleanName,
+        staff_name_en: res.staff_name_en || cleanName,
+        cashier_name: cleanName,
         template_id: branding?.template_id ?? null,
         brand_color: branding?.brand_color ?? null,
         accent_color: branding?.accent_color ?? null,
@@ -415,11 +465,13 @@ export function CashierTerminal() {
         target_stamps: 8,
       });
 
-      setCashierSession(biz.cashier_session);
+      setCashierSession(res.cashier_session);
       setPin("");
       playPOSChime("scan");
       toast.success(
-        ar ? `تم فتح الشاشة لـ ${biz.name_ar}` : `Terminal unlocked for ${biz.name_en}`,
+        ar
+          ? `مرحباً ${cleanName} — تم فتح الشاشة لـ ${res.name_ar}`
+          : `Welcome ${cleanName} — Terminal unlocked for ${res.name_en}`,
       );
 
       // Auto-start camera if in camera mode
@@ -450,7 +502,6 @@ export function CashierTerminal() {
     try {
       const { Html5Qrcode } = await import("html5-qrcode");
 
-      // Stop previous instance if running
       if (scannerRef.current) {
         try {
           await scannerRef.current.stop();
@@ -503,17 +554,16 @@ export function CashierTerminal() {
     setScannerFlashing(true);
     setTimeout(() => setScannerFlashing(false), 500);
 
-    // Save to recents immediately
     const updatedRecents = saveRecentPass(business.business_slug, cleanSerial, null);
     setRecentPasses(updatedRecents);
 
-    // Look up pass state from server
     setLookupLoading(true);
     try {
       const res = await lookupCustomerPass({
         data: {
           slug: business.business_slug,
           query: cleanSerial,
+          cashierSession,
         },
       });
 
@@ -522,25 +572,33 @@ export function CashierTerminal() {
         (ar ? business.offer_ar : business.offer_en) ||
         (ar ? "مكافأة خاصة" : "Special Reward");
 
+      // Initial scan guarantee: minimum 1 welcome stamp (never 0/N on initial scan)
+      const currentStamps = Math.max(1, res.stamps ?? 1);
+
       setActivePass({
         serial: res.serial || cleanSerial,
         phone: res.phone ?? null,
-        stamps: res.stamps ?? 0,
+        stamps: currentStamps,
         points: res.points ?? 0,
         targetStamps: res.targetStamps || business.target_stamps || 8,
         programType: res.programType || "stamp",
         morphed: res.morphed ?? false,
         offer: passOffer,
+        customerName: res.customerName,
+        rewardsRedeemed: res.rewardsRedeemed,
+        totalStamps: res.totalStamps,
       });
 
       toast.success(
-        ar ? `تم مسح البطاقة: ••••${cleanSerial.slice(-6)}` : `Pass scanned: ••••${cleanSerial.slice(-6)}`,
+        ar
+          ? `تم مسح البطاقة: ••••${cleanSerial.slice(-6)} (${currentStamps}/${res.targetStamps || 8})`
+          : `Pass scanned: ••••${cleanSerial.slice(-6)} (${currentStamps}/${res.targetStamps || 8})`,
       );
     } catch {
       setActivePass({
         serial: cleanSerial,
         phone: null,
-        stamps: 0,
+        stamps: 1, // Welcome stamp guarantee
         points: 0,
         targetStamps: business.target_stamps || 8,
         programType: "stamp",
@@ -565,6 +623,7 @@ export function CashierTerminal() {
         data: {
           slug: business.business_slug,
           query,
+          cashierSession,
         },
       });
 
@@ -577,33 +636,38 @@ export function CashierTerminal() {
       playPOSChime("scan");
       triggerHaptic("scan");
 
+      const currentStamps = Math.max(1, res.stamps ?? 1);
+
       const updatedRecents = saveRecentPass(
         business.business_slug,
         cleanSerial,
         res.phone || null,
-        res.stamps ?? 0,
+        currentStamps,
       );
       setRecentPasses(updatedRecents);
 
       setActivePass({
         serial: cleanSerial,
         phone: res.phone || (query.match(/^[0-9+]/) ? query : null),
-        stamps: res.stamps ?? 0,
+        stamps: currentStamps,
         points: res.points ?? 0,
         targetStamps: res.targetStamps || business.target_stamps || 8,
         programType: res.programType || "stamp",
         morphed: res.morphed ?? false,
         offer: passOffer,
+        customerName: res.customerName,
+        rewardsRedeemed: res.rewardsRedeemed,
+        totalStamps: res.totalStamps,
       });
 
       toast.success(
         res.isNew
           ? ar
-            ? "تم تسجيل عميل جديد بختم ترحيبي!"
-            : "New customer enrolled with 1 welcome stamp!"
+            ? "تم تسجيل عميل جديد بختم ترحيبي (1/8)!"
+            : "New customer enrolled with 1 welcome stamp (1/8)!"
           : ar
-            ? "تم العثور على بطاقة العميل"
-            : "Customer pass loaded",
+            ? `تم العثور على بطاقة العميل (${currentStamps}/${res.targetStamps || 8})`
+            : `Customer pass loaded (${currentStamps}/${res.targetStamps || 8})`,
       );
     } catch {
       playPOSChime("error");
@@ -682,6 +746,15 @@ export function CashierTerminal() {
             : `✓ SAR spend logged! Points balance: ${nextPoints} pts`;
         }
 
+        // Warn when a recorded action fails wallet sync (tested in check-wallet-payload.mjs)
+        if (!res.ok) {
+          toast.warning(
+            ar
+              ? "تم تسجيل العملية، لكن مزامنة المحفظة غير متاحة"
+              : "Action recorded, but wallet sync is unavailable",
+          );
+        }
+
         setActivePass((prev) =>
           prev
             ? {
@@ -724,7 +797,7 @@ export function CashierTerminal() {
   const storeEmoji = iconToEmoji(templateMeta.stampIcon);
 
   // =========================================================================
-  // 1. LOCKED TERMINAL SCREEN (PIN PAD)
+  // 1. LOCKED TERMINAL SCREEN (PIN PAD - 3 REQUIRED FIELDS)
   // =========================================================================
   if (!business) {
     return (
@@ -757,7 +830,7 @@ export function CashierTerminal() {
         <div className="w-full max-w-sm mx-auto my-auto">
           <form
             onSubmit={unlockTerminal}
-            className="space-y-5 rounded-2xl border border-zinc-800/80 bg-zinc-900/80 backdrop-blur-xl p-6 text-center shadow-2xl"
+            className="space-y-4 rounded-2xl border border-zinc-800/80 bg-zinc-900/80 backdrop-blur-xl p-6 text-center shadow-2xl"
           >
             <div className="space-y-1.5">
               <div className="mx-auto size-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center shadow-lg shadow-emerald-500/10">
@@ -768,107 +841,72 @@ export function CashierTerminal() {
               </h1>
               <p className="text-xs text-zinc-400">
                 {ar
-                  ? "أدخل معرّف المنشأة ورمز PIN المكون من ٤ أرقام"
-                  : "Enter business slug and 4-digit terminal PIN"}
+                  ? "أدخل اسم المنشأة، اسم الكاشير، ورمز PIN"
+                  : "Enter business slug, cashier name, and 4-digit PIN"}
               </p>
             </div>
 
             <div className="space-y-3 text-start">
-              {slug && branchCode && staffCode && !showManualSetup ? (
-                <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3 flex items-center justify-between">
-                  <div>
-                    <div className="text-[11px] text-zinc-400">
-                      {ar ? "محطة الكاشير المحددة" : "Configured Terminal"}
-                    </div>
-                    <div className="font-semibold text-zinc-200 mt-0.5 text-xs font-mono" dir="ltr">
-                      {slug} · {branchCode} / {staffCode}
-                    </div>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="text-xs text-emerald-400 hover:text-emerald-300"
-                    onClick={() => setShowManualSetup(true)}
-                  >
-                    {ar ? "تعديل" : "Change"}
-                  </Button>
-                </div>
-              ) : (
-                <>
-                  <div>
-                    <div className="flex items-center justify-between">
-                      <Label htmlFor="restaurant-slug" className="text-xs text-zinc-400">
-                        {ar ? "اسم المنشأة (Slug)" : "Business Slug"}
-                      </Label>
-                      {slug && branchCode && staffCode && showManualSetup ? (
-                        <button
-                          type="button"
-                          className="text-xs text-emerald-400 underline"
-                          onClick={() => setShowManualSetup(false)}
-                        >
-                          {ar ? "إخفاء التفاصيل" : "Collapse"}
-                        </button>
-                      ) : null}
-                    </div>
-                    <div className="relative mt-1">
-                      <Store className="absolute start-3 top-3 size-4 text-zinc-500" />
-                      <Input
-                        id="restaurant-slug"
-                        placeholder="smash-burger"
-                        value={slug}
-                        onChange={(e) =>
-                          setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))
-                        }
-                        required
-                        dir="ltr"
-                        className="ps-9 border-zinc-800 bg-zinc-950/80 text-zinc-100 placeholder:text-zinc-600 focus-visible:ring-emerald-500"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <Label htmlFor="branch-code" className="text-xs text-zinc-400">
-                        {ar ? "رمز الفرع (اختياري)" : "Branch Code"}
-                      </Label>
-                      <Input
-                        id="branch-code"
-                        placeholder="main"
-                        value={branchCode}
-                        onChange={(e) =>
-                          setBranchCode(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))
-                        }
-                        dir="ltr"
-                        className="mt-1 border-zinc-800 bg-zinc-950/80 text-zinc-100 placeholder:text-zinc-600 focus-visible:ring-emerald-500"
-                      />
-                    </div>
-                    <div>
-                      <Label htmlFor="staff-code" className="text-xs text-zinc-400">
-                        {ar ? "رمز الموظف (اختياري)" : "Staff Code"}
-                      </Label>
-                      <Input
-                        id="staff-code"
-                        placeholder="cashier1"
-                        value={staffCode}
-                        onChange={(e) =>
-                          setStaffCode(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))
-                        }
-                        dir="ltr"
-                        className="mt-1 border-zinc-800 bg-zinc-950/80 text-zinc-100 placeholder:text-zinc-600 focus-visible:ring-emerald-500"
-                      />
-                    </div>
-                  </div>
-                </>
-              )}
-
-              {/* PIN Visual Display */}
+              {/* Field 1: Business Slug */}
               <div>
-                <Label htmlFor="cashier-pin" className="text-xs text-zinc-400 flex items-center gap-1.5">
-                  <KeyRound className="size-3 text-emerald-400" />
-                  <span>{ar ? "رمز PIN (٤ أرقام)" : "Cashier PIN (4 digits)"}</span>
+                <Label htmlFor="restaurant-slug" className="text-xs text-zinc-400">
+                  {ar ? "معرّف المنشأة (Slug)" : "Business Slug"}
                 </Label>
-                <div className="mt-1.5 flex items-center justify-center gap-3 py-2 bg-zinc-950/70 border border-zinc-800 rounded-xl">
+                <div className="relative mt-1">
+                  <Store className="absolute start-3 top-3 size-4 text-zinc-500" />
+                  <Input
+                    id="restaurant-slug"
+                    placeholder="smash-burger"
+                    value={slug}
+                    onChange={(e) =>
+                      setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))
+                    }
+                    required
+                    dir="ltr"
+                    className="ps-9 border-zinc-800 bg-zinc-950/80 text-zinc-100 placeholder:text-zinc-600 focus-visible:ring-emerald-500"
+                  />
+                </div>
+              </div>
+
+              {/* Field 2: Cashier Name */}
+              <div>
+                <Label htmlFor="cashier-name" className="text-xs text-zinc-400">
+                  {ar ? "اسم الكاشير" : "Cashier Name"}
+                </Label>
+                <div className="relative mt-1">
+                  <User className="absolute start-3 top-3 size-4 text-zinc-500" />
+                  <Input
+                    id="cashier-name"
+                    placeholder={ar ? "أحمد أو سارة" : "Ahmed or Sarah"}
+                    value={cashierName}
+                    onChange={(e) => setCashierName(e.target.value)}
+                    required
+                    className="ps-9 border-zinc-800 bg-zinc-950/80 text-zinc-100 placeholder:text-zinc-600 focus-visible:ring-emerald-500"
+                  />
+                </div>
+              </div>
+
+              {/* Field 3: PIN Dots Display */}
+              <div>
+                <Label
+                  htmlFor="cashier-pin"
+                  className="text-xs text-zinc-400 flex items-center justify-between"
+                >
+                  <span className="flex items-center gap-1.5">
+                    <KeyRound className="size-3 text-emerald-400" />
+                    <span>{ar ? "رمز PIN (٤ أرقام)" : "Cashier PIN (4 digits)"}</span>
+                  </span>
+                  {pin.length > 0 && (
+                    <button
+                      type="button"
+                      className="text-[11px] text-zinc-500 hover:text-zinc-300 underline"
+                      onClick={() => setPin("")}
+                    >
+                      {ar ? "مسح" : "Clear"}
+                    </button>
+                  )}
+                </Label>
+                <div className="mt-1.5 flex items-center justify-center gap-3 py-2.5 bg-zinc-950/70 border border-zinc-800 rounded-xl">
                   {[0, 1, 2, 3].map((idx) => {
                     const filled = pin.length > idx;
                     return (
@@ -886,7 +924,7 @@ export function CashierTerminal() {
               </div>
             </div>
 
-            {/* Tactile Keypad */}
+            {/* Tactile Numeric Keypad */}
             <div className="grid grid-cols-3 gap-2 pt-1">
               {["1", "2", "3", "4", "5", "6", "7", "8", "9", "C", "0", "↵"].map((k) => (
                 <button
@@ -913,7 +951,7 @@ export function CashierTerminal() {
             <Button
               type="submit"
               className="w-full h-12 text-base font-bold bg-emerald-500 hover:bg-emerald-400 text-zinc-950 rounded-xl shadow-lg shadow-emerald-500/20"
-              disabled={authenticating || pin.length !== 4}
+              disabled={authenticating || pin.length !== 4 || !cashierName.trim() || !slug.trim()}
             >
               {authenticating
                 ? ar
@@ -971,12 +1009,16 @@ export function CashierTerminal() {
                 </div>
                 <div className="text-[10px] text-zinc-400 flex items-center gap-1.5 truncate">
                   <span className="font-mono text-emerald-400">@{business.business_slug}</span>
-                  {business.staff_name_en && (
-                    <>
-                      <span>·</span>
-                      <span>{ar ? business.staff_name_ar : business.staff_name_en}</span>
-                    </>
-                  )}
+                  {/* Cashier Name Display */}
+                  <span className="text-zinc-600">·</span>
+                  <span className="text-zinc-300 font-medium flex items-center gap-0.5">
+                    <User className="size-2.5 text-emerald-400 inline" />
+                    <span>
+                      {ar
+                        ? `الكاشير: ${business.cashier_name || business.staff_name_ar}`
+                        : `Cashier: ${business.cashier_name || business.staff_name_en}`}
+                    </span>
+                  </span>
                 </div>
               </div>
             </div>
@@ -1056,11 +1098,28 @@ export function CashierTerminal() {
                 <div>
                   <div className="font-bold text-sm sm:text-base text-zinc-100 flex items-center gap-2">
                     <span>
-                      {activePass.phone || (ar ? "عميل زائر (Pass)" : "Loyalty Pass Customer")}
+                      {activePass.phone
+                        ? activePass.phone
+                        : activePass.customerName ||
+                          (ar ? "عميل زائر (Pass)" : "Loyalty Pass Customer")}
                     </span>
                   </div>
-                  <div className="text-xs font-mono text-zinc-400 mt-0.5" dir="ltr">
-                    {activePass.serial}
+                  {/* Monospace Pass Serial Badge */}
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <span
+                      className="text-xs font-mono font-semibold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20"
+                      dir="ltr"
+                    >
+                      {activePass.serial}
+                    </span>
+                    {activePass.rewardsRedeemed !== undefined &&
+                      activePass.rewardsRedeemed > 0 && (
+                        <span className="text-[10px] text-amber-400">
+                          {ar
+                            ? `(${activePass.rewardsRedeemed} مكافأة مستلمة)`
+                            : `(${activePass.rewardsRedeemed} redeemed)`}
+                        </span>
+                      )}
                   </div>
                 </div>
               </div>
@@ -1258,22 +1317,18 @@ export function CashierTerminal() {
                 <div className="rounded-2xl border border-zinc-800 bg-zinc-950 p-4 shadow-2xl">
                   {/* Viewport container */}
                   <div className="relative aspect-square max-w-sm mx-auto overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 flex items-center justify-center">
-                    {/* The Html5Qrcode video canvas container */}
                     <div id="qr-reader" className="w-full h-full overflow-hidden" />
 
                     {/* Animated corner reticle & sweep line while scanning */}
                     {scanning && (
                       <div className="pointer-events-none absolute inset-6 flex flex-col justify-between">
-                        {/* Top reticles */}
                         <div className="flex justify-between">
                           <div className="size-6 border-s-2 border-t-2 border-emerald-400 rounded-tl-sm shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
                           <div className="size-6 border-e-2 border-t-2 border-emerald-400 rounded-tr-sm shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
                         </div>
 
-                        {/* Middle scanning laser line */}
                         <div className="w-full h-0.5 bg-gradient-to-r from-transparent via-emerald-400 to-transparent shadow-[0_0_12px_rgba(16,185,129,0.8)] animate-pulse" />
 
-                        {/* Bottom reticles */}
                         <div className="flex justify-between">
                           <div className="size-6 border-s-2 border-b-2 border-emerald-400 rounded-bl-sm shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
                           <div className="size-6 border-e-2 border-b-2 border-emerald-400 rounded-br-sm shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
@@ -1324,8 +1379,8 @@ export function CashierTerminal() {
                     <p className="text-xs text-zinc-400">
                       {scanning
                         ? ar
-                          ? "وجّه رمز QR لبطاقة المحفظة داخل الإطار..."
-                          : "Align Apple Wallet pass QR inside frame..."
+                          ? "وجّه رمز QR لبطاقة Apple Wallet داخل الإطار للمسح الفوري..."
+                          : "Align Apple Wallet pass QR inside frame for instant scan..."
                         : ar
                           ? "اضغط لتشغيل الكاميرا والمسح التلقائي"
                           : "Tap button above to arm camera"}
@@ -1342,8 +1397,8 @@ export function CashierTerminal() {
                   <Input
                     placeholder={
                       ar
-                        ? "أو اكتب كود البطاقة (PP-...) أو رقم الجوال..."
-                        : "Or paste pass serial (PP-...) or phone..."
+                        ? "اكتب رقم الجوال (05...) أو كود البطاقة (PP-...)..."
+                        : "Phone (05...) or Pass Code (PP-...)..."
                     }
                     value={manualInput}
                     onChange={(e) => setManualInput(e.target.value)}
@@ -1376,12 +1431,12 @@ export function CashierTerminal() {
                   <div className="space-y-1">
                     <h2 className="text-base font-bold text-zinc-100 flex items-center gap-2">
                       <Search className="size-4 text-emerald-400" />
-                      <span>{ar ? "البحث اليدوي عن البطاقة" : "Manual Pass / Phone Lookup"}</span>
+                      <span>{ar ? "البحث برقم الجوال أو كود البطاقة" : "Phone or Pass Code Lookup"}</span>
                     </h2>
-                    <p className="text-xs text-zinc-400">
+                    <p className="text-xs text-zinc-400 leading-relaxed">
                       {ar
-                        ? "أدخل معرّف البطاقة (PP-XXXXXX) أو رقم جوال العميل (05XXXXXXXX)"
-                        : "Enter Pass Serial (PP-XXXXXX) or Customer Phone (+9665...)"}
+                        ? "أدخل رقم جوال العميل (05XXXXXXXX) الذي يحفظه دائماً، أو معرّف البطاقة الظاهر على واجهة البطاقة (PP-XXXXXX)"
+                        : "Enter the customer's phone number (05... / +966...) or the Pass Code (PP-...) printed on their pass"}
                     </p>
                   </div>
 
@@ -1389,7 +1444,11 @@ export function CashierTerminal() {
                     <div className="relative">
                       <Input
                         autoFocus
-                        placeholder="PP-482019 or 0501234567"
+                        placeholder={
+                          ar
+                            ? "مثال: 0501234567 أو PP-482019"
+                            : "e.g., 0501234567 or PP-482019"
+                        }
                         value={manualInput}
                         onChange={(e) => setManualInput(e.target.value)}
                         dir="ltr"
@@ -1457,12 +1516,11 @@ export function CashierTerminal() {
                       ))}
                     </div>
                   ) : (
-                    /* Default Demo shortcuts for immediate desktop testing */
                     <div className="p-3 rounded-xl border border-dashed border-zinc-800 text-center space-y-2">
                       <p className="text-xs text-zinc-500">
                         {ar
-                          ? "لا توجد بطاقات حديثة بعد. يمكنك تجربة رقم جوال تجريبي:"
-                          : "No recent passes yet. Try a test customer phone:"}
+                          ? "لا توجد بطاقات سابقة. يمكنك تجربة رقم جوال تجريبي:"
+                          : "No recent passes yet. Try entering a customer phone:"}
                       </p>
                       <button
                         type="button"
