@@ -190,6 +190,130 @@ export function parsePassTemplateMeta(templateId?: string | null): PassTemplateM
   };
 }
 
+export interface ResolvedRestaurantBranding {
+  stampIcon: string;
+  stampEmoji: string;
+  colorPreset: WalletColorPreset;
+  brandHex: string;
+  accentHex: string;
+  tierMode: WalletTierMode;
+  stripStyle: StripStyle;
+}
+
+export function resolveRestaurantBranding(params: {
+  brandColor?: string | null | undefined;
+  accentColor?: string | null | undefined;
+  templateId?: string | null | undefined;
+  offerEn?: string | null | undefined;
+  offerAr?: string | null | undefined;
+  nameEn?: string | null | undefined;
+  nameAr?: string | null | undefined;
+}): ResolvedRestaurantBranding {
+  const meta = parsePassTemplateMeta(params.templateId);
+  const combined =
+    `${params.offerEn ?? ""} ${params.offerAr ?? ""} ${params.nameEn ?? ""} ${params.nameAr ?? ""} ${params.brandColor ?? ""}`.toLowerCase();
+
+  let stampIcon = meta.stampIcon;
+  let colorPreset = meta.colorPreset;
+
+  // Infer industry icon if still default 'star' or if explicit keywords exist in the restaurant's name/offer
+  if (stampIcon === "star") {
+    if (
+      combined.includes("☕") ||
+      combined.includes("coffee") ||
+      combined.includes("قهوة") ||
+      combined.includes("كافيه") ||
+      combined.includes("مقهى") ||
+      combined.includes("espresso") ||
+      combined.includes("latte")
+    ) {
+      stampIcon = "coffee";
+      if (!params.templateId?.includes("preset-")) colorPreset = "orange";
+    } else if (
+      combined.includes("🍔") ||
+      combined.includes("burger") ||
+      combined.includes("برجر") ||
+      combined.includes("bistro")
+    ) {
+      stampIcon = "burger";
+      if (!params.templateId?.includes("preset-")) colorPreset = "red";
+    } else if (
+      combined.includes("🥐") ||
+      combined.includes("bakery") ||
+      combined.includes("مخبز") ||
+      combined.includes("حلويات") ||
+      combined.includes("sweets") ||
+      combined.includes("pastry")
+    ) {
+      stampIcon = "bakery";
+      if (!params.templateId?.includes("preset-")) colorPreset = "orange";
+    } else if (
+      combined.includes("✂️") ||
+      combined.includes("salon") ||
+      combined.includes("صالون") ||
+      combined.includes("حلاقة") ||
+      combined.includes("barber")
+    ) {
+      stampIcon = "salon";
+      if (!params.templateId?.includes("preset-")) colorPreset = "purple";
+    } else if (
+      combined.includes("🚗") ||
+      combined.includes("car") ||
+      combined.includes("غسيل") ||
+      combined.includes("سيارات")
+    ) {
+      stampIcon = "car";
+      if (!params.templateId?.includes("preset-")) colorPreset = "blue";
+    } else if (combined.includes("🎁") || combined.includes("gift") || combined.includes("هدية")) {
+      stampIcon = "gift";
+    }
+  }
+
+  // Determine true restaurant brand hex color
+  let brandHex: string;
+  let accentHex: string;
+
+  const presetInfo = WALLET_COLOR_PRESETS[colorPreset] ?? WALLET_COLOR_PRESETS.orange;
+
+  // If brandColor is explicitly provided and not default platform emerald (#059669)
+  const isDefaultPlatformEmerald = params.brandColor?.toLowerCase() === "#059669";
+  if (params.brandColor && !isDefaultPlatformEmerald) {
+    brandHex = params.brandColor;
+    accentHex = params.accentColor || presetInfo.accent;
+  } else {
+    // If brandColor was default emerald but restaurant is coffee/burger/etc., use authentic industry hex
+    if (stampIcon === "coffee" || colorPreset === "orange") {
+      brandHex = "#e65100"; // Rich Coffee Orange
+      accentHex = "#fbbf24"; // Warm Amber
+    } else if (stampIcon === "burger" || colorPreset === "red") {
+      brandHex = "#dc2626"; // Crimson
+      accentHex = "#f87171";
+    } else if (stampIcon === "bakery") {
+      brandHex = "#d97706"; // Warm Bakery Amber
+      accentHex = "#fbbf24";
+    } else if (stampIcon === "salon" || colorPreset === "purple") {
+      brandHex = "#581c87";
+      accentHex = "#c084fc";
+    } else if (stampIcon === "car" || colorPreset === "blue") {
+      brandHex = "#1e40af";
+      accentHex = "#60a5fa";
+    } else {
+      brandHex = params.brandColor || presetInfo.hex;
+      accentHex = params.accentColor || presetInfo.accent;
+    }
+  }
+
+  return {
+    stampIcon,
+    stampEmoji: iconToEmoji(stampIcon),
+    colorPreset,
+    brandHex,
+    accentHex,
+    tierMode: meta.tierMode,
+    stripStyle: meta.stripStyle,
+  };
+}
+
 const TIER_STORAGE_KEY = "pointpass_wallet_tier_mode";
 
 export function getStoredWalletTier(): WalletTierMode {

@@ -14,6 +14,7 @@ import {
   parsePassTemplateMeta,
   iconToEmoji,
   WALLET_COLOR_PRESETS,
+  resolveRestaurantBranding,
   type StripStyle,
   type WalletColorPreset,
   type WalletTierMode,
@@ -267,38 +268,49 @@ export const getPublicBusinessBySlug = createServerFn({ method: "GET" })
     }
 
     const rawTemplateId = (biz["template_id"] as string) ?? null;
-    const templateMeta = parsePassTemplateMeta(rawTemplateId);
     const targetStamps = Number(biz["target_stamps"] || 8);
-    const brandColor = (biz["brand_color"] as string) || "#121214";
-    const accentColor = (biz["accent_color"] as string) || "#10B981";
+    const offerAr = (biz["offer_ar"] as string) || "";
+    const offerEn = (biz["offer_en"] as string) || "";
+    const nameAr = (biz["name_ar"] as string) || "";
+    const nameEn = (biz["name_en"] as string) || "";
 
-    const presetInfo = WALLET_COLOR_PRESETS[templateMeta.colorPreset] ?? WALLET_COLOR_PRESETS.green;
-    const resolvedAccentHex = presetInfo?.accent || accentColor;
-    const resolvedBrandHex = presetInfo?.hex || brandColor;
+    const branding = resolveRestaurantBranding({
+      brandColor: (biz["brand_color"] as string) ?? null,
+      accentColor: (biz["accent_color"] as string) ?? null,
+      templateId: rawTemplateId,
+      offerEn,
+      offerAr,
+      nameEn,
+      nameAr,
+    });
 
     return {
       ok: true as const,
       error: null,
       business: {
         id: (biz["id"] as string) || "",
-        name: (biz["name_ar"] as string) || (biz["name_en"] as string) || cleanSlug,
-        name_ar: (biz["name_ar"] as string) || "",
-        name_en: (biz["name_en"] as string) || "",
+        name: nameAr || nameEn || cleanSlug,
+        name_ar: nameAr,
+        name_en: nameEn,
         slug: (biz["slug"] as string) || cleanSlug,
-        offer_ar: (biz["offer_ar"] as string) || "",
-        offer_en: (biz["offer_en"] as string) || "",
+        offer_ar: offerAr,
+        offer_en: offerEn,
         target_stamps: targetStamps,
         stamps_required: targetStamps,
-        brand_color: brandColor,
-        accent_color: accentColor,
+        brand_color: branding.brandHex,
+        accent_color: branding.accentHex,
         logo_url: (biz["logo_url"] as string) || null,
         template_id: rawTemplateId,
         program_type: (biz["program_type"] as string) || "stamp",
         templateMeta: {
-          ...templateMeta,
-          stampEmoji: iconToEmoji(templateMeta.stampIcon),
-          accentHex: resolvedAccentHex,
-          brandHex: resolvedBrandHex,
+          baseId: rawTemplateId || "blank",
+          stampIcon: branding.stampIcon,
+          stampEmoji: branding.stampEmoji,
+          stripStyle: branding.stripStyle,
+          colorPreset: branding.colorPreset,
+          tierMode: branding.tierMode,
+          accentHex: branding.accentHex,
+          brandHex: branding.brandHex,
         },
       },
     };
@@ -472,6 +484,8 @@ export const createWalletPass = createServerFn({ method: "POST" })
     // Query business visual branding (colors, logo, template metadata, offer texts)
     // First try direct table query; if blocked under anon RLS, fall back to get_public_business_by_slug RPC
     let biz: {
+      name_ar?: string | null;
+      name_en?: string | null;
       brand_color?: string | null;
       accent_color?: string | null;
       logo_url?: string | null;
@@ -484,7 +498,9 @@ export const createWalletPass = createServerFn({ method: "POST" })
     try {
       const { data: bizRow } = await supabase
         .from("businesses")
-        .select("brand_color,accent_color,logo_url,offer_ar,offer_en,custom_domain,template_id")
+        .select(
+          "name_ar,name_en,brand_color,accent_color,logo_url,offer_ar,offer_en,custom_domain,template_id",
+        )
         .eq("slug", data.slug)
         .maybeSingle();
       if (bizRow) {
@@ -502,6 +518,8 @@ export const createWalletPass = createServerFn({ method: "POST" })
         if (rpcBiz) {
           const row = rpcBiz as Record<string, unknown>;
           biz = {
+            name_ar: (row["name_ar"] as string) ?? null,
+            name_en: (row["name_en"] as string) ?? null,
             brand_color: (row["brand_color"] as string) ?? null,
             accent_color: (row["accent_color"] as string) ?? null,
             logo_url: (row["logo_url"] as string) ?? null,
@@ -523,15 +541,23 @@ export const createWalletPass = createServerFn({ method: "POST" })
       data.templateId ||
       (biz?.custom_domain?.startsWith("tpl_") ? biz.custom_domain : null);
 
-    const templateMeta = parsePassTemplateMeta(rawTemplateId);
-    const effectiveColorPreset =
-      rawTemplateId && rawTemplateId.includes("preset-")
-        ? templateMeta.colorPreset
-        : resolveColorPreset(effectiveBrandColor, effectiveAccentColor);
+    const passOffer =
+      biz?.offer_en ||
+      biz?.offer_ar ||
+      data.offerEn ||
+      data.offerAr ||
+      claim.business_offer ||
+      "Special Reward";
 
-    const presetInfo = WALLET_COLOR_PRESETS[templateMeta.colorPreset] ?? WALLET_COLOR_PRESETS.green;
-    const resolvedAccentHex = presetInfo?.accent || effectiveAccentColor || "#10B981";
-    const resolvedBrandHex = presetInfo?.hex || effectiveBrandColor || "#121214";
+    const branding = resolveRestaurantBranding({
+      brandColor: effectiveBrandColor,
+      accentColor: effectiveAccentColor,
+      templateId: rawTemplateId,
+      offerEn: passOffer,
+      offerAr: biz?.offer_ar || data.offerAr,
+      nameEn: biz?.name_en || claim.business_name,
+      nameAr: biz?.name_ar,
+    });
 
     const targetStamps = claim.business_target_stamps || 8;
     const isStampCard =
@@ -554,40 +580,29 @@ export const createWalletPass = createServerFn({ method: "POST" })
       }
     }
 
-    const passOffer =
-      biz?.offer_en ||
-      biz?.offer_ar ||
-      data.offerEn ||
-      data.offerAr ||
-      claim.business_offer ||
-      "Special Reward";
-
-    const icon =
-      templateMeta.stampIcon !== "star"
-        ? templateMeta.stampIcon
-        : resolveStampIcon(null, passOffer, effectiveBrandColor);
+    const icon = branding.stampIcon;
 
     let stripDataUri: string | undefined;
     let stripUrl: string | undefined;
-    if (isStampCard && templateMeta.tierMode === "pro") {
+    if (isStampCard && branding.tierMode === "pro") {
       try {
         stripUrl = getPublicStripUrl(
           data.slug,
           currentStamps,
           targetStamps,
-          effectiveBrandColor,
-          effectiveAccentColor,
+          branding.brandHex,
+          branding.accentHex,
           icon,
-          templateMeta.stripStyle,
+          branding.stripStyle,
         );
         if (!stripUrl) {
           stripDataUri = generateStampStripDataUri({
             targetStamps,
             stamps: currentStamps,
-            brandColor: effectiveBrandColor,
-            accentColor: effectiveAccentColor,
+            brandColor: branding.brandHex,
+            accentColor: branding.accentHex,
             stampIcon: icon,
-            stripStyle: templateMeta.stripStyle,
+            stripStyle: branding.stripStyle,
           });
         }
       } catch (stripErr) {
@@ -608,15 +623,15 @@ export const createWalletPass = createServerFn({ method: "POST" })
       points: claim.pass_points ?? 0,
       morphed: claim.pass_morphed ?? false,
       targetStamps,
-      brandColor: effectiveBrandColor,
-      accentColor: effectiveAccentColor,
+      brandColor: branding.brandHex,
+      accentColor: branding.accentHex,
       stripUrl,
       stripDataUri,
       logoUrl: biz?.logo_url,
       stampIcon: icon,
-      colorPreset: effectiveColorPreset,
-      stripStyle: templateMeta.stripStyle,
-      tierMode: templateMeta.tierMode,
+      colorPreset: branding.colorPreset,
+      stripStyle: branding.stripStyle,
+      tierMode: branding.tierMode,
     };
 
     let result: {
@@ -683,10 +698,14 @@ export const createWalletPass = createServerFn({ method: "POST" })
         offerAr: biz?.offer_ar || data.offerAr || "",
         offerEn: biz?.offer_en || data.offerEn || "",
         templateMeta: {
-          ...templateMeta,
-          stampEmoji: iconToEmoji(templateMeta.stampIcon),
-          accentHex: resolvedAccentHex,
-          brandHex: resolvedBrandHex,
+          baseId: rawTemplateId || "blank",
+          stampIcon: branding.stampIcon,
+          stampEmoji: branding.stampEmoji,
+          stripStyle: branding.stripStyle,
+          colorPreset: branding.colorPreset,
+          tierMode: branding.tierMode,
+          accentHex: branding.accentHex,
+          brandHex: branding.brandHex,
         },
         appleUrl: null as string | null,
         googleUrl: null as string | null,
@@ -746,10 +765,14 @@ export const createWalletPass = createServerFn({ method: "POST" })
       offerAr: biz?.offer_ar || data.offerAr || "",
       offerEn: biz?.offer_en || data.offerEn || "",
       templateMeta: {
-        ...templateMeta,
-        stampEmoji: iconToEmoji(templateMeta.stampIcon),
-        accentHex: resolvedAccentHex,
-        brandHex: resolvedBrandHex,
+        baseId: rawTemplateId || "blank",
+        stampIcon: branding.stampIcon,
+        stampEmoji: branding.stampEmoji,
+        stripStyle: branding.stripStyle,
+        colorPreset: branding.colorPreset,
+        tierMode: branding.tierMode,
+        accentHex: branding.accentHex,
+        brandHex: branding.brandHex,
       },
       appleUrl: shareUrl,
       googleUrl,

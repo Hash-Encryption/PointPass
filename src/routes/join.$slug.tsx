@@ -1,19 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import {
-  Apple,
-  Check,
-  Copy,
-  Gift,
-  Loader2,
-  Phone,
-  RefreshCw,
-  ShieldCheck,
-  Smartphone,
-  Sparkles,
-  Zap,
-} from "lucide-react";
+import { Apple, Check, Copy, Gift, Loader2, Phone, RefreshCw, Smartphone } from "lucide-react";
 import { useLocale } from "@/lib/i18n";
 import { resolveSlugFromHost } from "@/lib/supabase";
 import {
@@ -21,7 +9,12 @@ import {
   getPublicBusinessBySlug,
   refreshCustomerPassStatus,
 } from "@/lib/wallet.functions";
-import { type StripStyle, type WalletColorPreset, type WalletTierMode } from "@/lib/wallet-tier";
+import {
+  resolveRestaurantBranding,
+  type StripStyle,
+  type WalletColorPreset,
+  type WalletTierMode,
+} from "@/lib/wallet-tier";
 import { generateStampStripSvg } from "@/lib/strip-svg";
 import { LocalQrCode } from "@/components/LocalQrCode";
 import { Button } from "@/components/ui/button";
@@ -119,14 +112,13 @@ function ClaimPage() {
   const [businessError, setBusinessError] = useState<string | null>(loaderData?.error ?? null);
 
   const [phone, setPhone] = useState("");
-  const [name, setName] = useState("");
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [activePass, setActivePass] = useState<ActivePass | null>(null);
   const [copied, setCopied] = useState(false);
   const [stampPulsing, setStampPulsing] = useState(false);
 
-  // Detect user device OS: iOS / Safari vs Android vs Desktop
+  // Detect user device OS: iOS vs Android vs Desktop
   const deviceOS = useMemo(() => {
     if (typeof window === "undefined") return "ios";
     const ua = navigator.userAgent || "";
@@ -248,10 +240,21 @@ function ClaimPage() {
     }
   }, [business?.offer_ar, business?.offer_en, slug, storageKey]);
 
-  // Color theme & visual properties
-  const brandHex = business?.templateMeta?.brandHex || business?.brand_color || "#18181b";
-  const accentHex = business?.templateMeta?.accentHex || business?.accent_color || "#10B981";
-  const stampEmoji = business?.templateMeta?.stampEmoji || "⭐";
+  // Dynamic restaurant branding (resolves true emoji and brand color like warm coffee orange for testpass)
+  const branding = useMemo(() => {
+    return resolveRestaurantBranding({
+      brandColor: business?.brand_color,
+      accentColor: business?.accent_color,
+      templateId: business?.template_id,
+      offerEn: business?.offer_en,
+      offerAr: business?.offer_ar,
+      nameEn: business?.name_en,
+      nameAr: business?.name_ar,
+    });
+  }, [business]);
+
+  const brandHex = branding.brandHex;
+  const stampEmoji = branding.stampEmoji;
   const targetStamps = business?.stamps_required || 8;
   const storeName = ar
     ? business?.name_ar || business?.name || slug
@@ -268,14 +271,14 @@ function ClaimPage() {
         targetStamps: business.stamps_required || 8,
         stamps: activePass ? activePass.currentStamps : 1,
         brandColor: brandHex,
-        accentColor: accentHex,
-        stampIcon: business.templateMeta.stampIcon,
-        stripStyle: business.templateMeta.stripStyle,
+        accentColor: branding.accentHex,
+        stampIcon: branding.stampIcon,
+        stripStyle: branding.stripStyle,
       });
     } catch {
       return "";
     }
-  }, [activePass, business, brandHex, accentHex]);
+  }, [activePass, business, brandHex, branding.accentHex, branding.stampIcon, branding.stripStyle]);
 
   // Claim or resume customer pass (supports both phone-backed and instant skip)
   const handleClaim = useCallback(
@@ -296,9 +299,8 @@ function ClaimPage() {
           data: {
             slug,
             phone: skipPhone ? undefined : trimmedPhone,
-            customerName: name.trim() || undefined,
-            brandColor: business?.brand_color,
-            accentColor: business?.accent_color,
+            brandColor: brandHex,
+            accentColor: branding.accentHex,
             templateId: business?.template_id,
             offerAr: business?.offer_ar,
             offerEn: business?.offer_en,
@@ -369,12 +371,11 @@ function ClaimPage() {
     },
     [
       ar,
-      business?.accent_color,
-      business?.brand_color,
+      brandHex,
+      branding.accentHex,
       business?.offer_ar,
       business?.offer_en,
       business?.template_id,
-      name,
       phone,
       slug,
       storageKey,
@@ -455,14 +456,13 @@ function ClaimPage() {
     }
     setActivePass(null);
     setPhone("");
-    setName("");
   }, [storageKey]);
 
   if (businessLoading) {
     return (
       <div className="grid min-h-screen place-items-center bg-[#09090b] text-zinc-300">
         <div className="flex flex-col items-center gap-3">
-          <Loader2 className="size-8 animate-spin text-emerald-400" />
+          <Loader2 className="size-8 animate-spin" style={{ color: brandHex }} />
           <p className="text-sm font-medium text-zinc-400">
             {ar ? "جاري تحميل بطاقة الولاء..." : "Loading loyalty pass..."}
           </p>
@@ -490,29 +490,18 @@ function ClaimPage() {
   return (
     <div
       dir={ar ? "rtl" : "ltr"}
-      className="min-h-screen bg-[#09090b] text-zinc-100 selection:bg-emerald-500 selection:text-black antialiased relative overflow-x-hidden font-sans"
+      className="min-h-screen bg-[#09090b] text-zinc-100 antialiased relative overflow-x-hidden font-sans"
       style={{
-        backgroundImage: `radial-gradient(circle 500px at 50% -50px, ${accentHex}18, transparent 75%)`,
+        backgroundImage: `radial-gradient(circle 500px at 50% -80px, ${brandHex}28, transparent 75%)`,
       }}
     >
-      <div className="mx-auto flex min-h-screen max-w-md flex-col px-5 py-5 sm:py-7">
-        {/* A. TOP BAR (Clean, Authentic Trust — No Fake Domains!) */}
-        <header className="flex items-center justify-between gap-3 border-b border-zinc-800/60 pb-3.5">
-          {/* Left: Official Loyalty Club Pill */}
-          <div className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-950/40 px-3 py-1 text-xs font-semibold text-emerald-400 shadow-xs backdrop-blur-md">
-            <span className="relative flex size-2">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-              <span className="relative inline-flex size-2 rounded-full bg-emerald-500" />
-            </span>
-            <ShieldCheck className="size-3.5" />
-            <span>{ar ? "برنامج الولاء الرسمي" : "Official Loyalty Club"}</span>
-          </div>
-
-          {/* Right: 1-Tap Bilingual Toggle */}
+      <div className="mx-auto flex min-h-screen max-w-md flex-col px-5 py-5 sm:py-6">
+        {/* Top Right Language Switcher Only (Clean, Minimal) */}
+        <header className="flex items-center justify-end pb-2">
           <button
             type="button"
             onClick={toggle}
-            className="rounded-full border border-zinc-800 bg-zinc-900/90 px-3 py-1 text-xs font-semibold text-zinc-300 hover:text-white hover:border-zinc-700 transition-colors shadow-xs cursor-pointer"
+            className="rounded-full border border-zinc-800 bg-zinc-900/80 px-3 py-1 text-xs font-semibold text-zinc-300 hover:text-white hover:border-zinc-700 transition-colors shadow-xs cursor-pointer"
             aria-label={ar ? "Switch to English" : "التبديل إلى العربية"}
           >
             {ar ? "English" : "العربية"}
@@ -520,97 +509,75 @@ function ClaimPage() {
         </header>
 
         {/* Main Body */}
-        <main className="mt-5 flex-1 space-y-5">
+        <main className="flex-1 space-y-6">
           {!activePass ? (
-            /* PRE-CLAIM STATE: Hero Value Hook, Lifelike Card, 3-Step Micro Explainer & Unified Claim Box */
-            <div className="space-y-5">
-              {/* B. HERO VALUE PROPOSITION (Above the Fold Sales Hook) */}
-              <div className="text-center space-y-2.5 pt-1">
-                {/* Store Identity Badge */}
-                <div className="inline-flex items-center gap-2 rounded-2xl border border-zinc-800/80 bg-zinc-900/80 px-3.5 py-1.5 shadow-inner">
-                  {business.logo_url ? (
-                    <img
-                      src={business.logo_url}
-                      alt={storeName}
-                      className="size-5 rounded-md object-cover"
-                    />
-                  ) : (
-                    <span className="text-base">{stampEmoji}</span>
-                  )}
-                  <span className="text-xs font-bold text-zinc-200">{storeName}</span>
-                </div>
+            /* PRE-CLAIM: Restaurant Hero, Authentic Wallet Card & Clean Claim Box */
+            <div className="space-y-6">
+              {/* 1. RESTAURANT IDENTITY HERO (Top & Centered) */}
+              <div className="text-center space-y-2 pt-1">
+                {/* 64px x 64px Restaurant Avatar / Logo */}
+                {business.logo_url ? (
+                  <img
+                    src={business.logo_url}
+                    alt={storeName}
+                    className="size-16 rounded-2xl object-cover shadow-xl border border-white/10 mx-auto"
+                  />
+                ) : (
+                  <div
+                    className="size-16 rounded-2xl flex items-center justify-center text-3xl shadow-xl mx-auto border border-white/15"
+                    style={{
+                      background: `linear-gradient(135deg, ${brandHex} 0%, #18181b 100%)`,
+                    }}
+                  >
+                    <span>{stampEmoji}</span>
+                  </div>
+                )}
 
-                {/* Punchy Reward Headline */}
-                <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white leading-tight">
-                  {ar ? (
-                    <>
-                      احصل على مكافأتك المجانية:{" "}
-                      <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-teal-200">
-                        {storeOffer}
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      Unlock Your Free Reward:{" "}
-                      <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-teal-200">
-                        {storeOffer}
-                      </span>
-                    </>
-                  )}
+                {/* Big, Bold Restaurant Name */}
+                <h1 className="text-3xl font-extrabold tracking-tight text-white leading-tight">
+                  {storeName}
                 </h1>
 
-                {/* Glowing Welcome Gift Pill */}
-                <div className="inline-flex items-center gap-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-4 py-1.5 text-xs font-bold text-amber-300 shadow-[0_0_15px_rgba(245,158,11,0.15)]">
-                  <Sparkles className="size-3.5 text-amber-400" />
-                  <span>
-                    {ar
-                      ? `🎁 هدية الترحيب: ختمك الأول (1/${targetStamps}) مجاناً عند الإضافة الآن!`
-                      : `🎁 BONUS: Your 1st Stamp (1/${targetStamps}) is FREE when you join today!`}
-                  </span>
-                </div>
+                {/* Clean Subtitle */}
+                <p className="text-sm font-medium text-zinc-300 max-w-xs mx-auto leading-snug">
+                  {ar ? (
+                    <>
+                      نادي المكافآت • اجمع{" "}
+                      <span className="text-white font-bold">{targetStamps} أختام</span> للحصول على:{" "}
+                      <span className="text-white font-bold">{storeOffer}</span>
+                    </>
+                  ) : (
+                    <>
+                      Rewards Club • Collect{" "}
+                      <span className="text-white font-bold">{targetStamps} stamps</span> for:{" "}
+                      <span className="text-white font-bold">{storeOffer}</span>
+                    </>
+                  )}
+                </p>
               </div>
 
-              {/* C. CENTERPIECE: LIFELIKE VISUAL WALLET CARD PREVIEW */}
+              {/* 2. AUTHENTIC RESTAURANT WALLET CARD (Solid Rich Brand Color) */}
               <div
-                className="relative overflow-hidden rounded-3xl border border-white/10 p-5 sm:p-6 shadow-[0_20px_50px_rgba(0,0,0,0.6)] backdrop-blur-xl transition-all"
+                className="relative overflow-hidden rounded-3xl border border-white/20 p-5 sm:p-6 shadow-[0_20px_50px_rgba(0,0,0,0.6)] backdrop-blur-xl transition-all"
                 style={{
-                  background: `linear-gradient(145deg, ${brandHex} 0%, #121214 90%)`,
+                  background: `linear-gradient(155deg, ${brandHex} 0%, ${brandHex}dd 50%, #121214 100%)`,
                 }}
               >
-                {/* Ambient Top Light */}
-                <div
-                  className="pointer-events-none absolute -top-20 -right-20 size-44 rounded-full blur-3xl opacity-35"
-                  style={{ backgroundColor: accentHex }}
-                />
-
-                {/* Card Top Row: Logo & Stamps Counter Badge */}
-                <div className="flex items-center justify-between gap-3 pb-3 border-b border-white/10">
+                {/* Card Top Row */}
+                <div className="flex items-center justify-between gap-3 pb-3 border-b border-white/15">
                   <div className="flex items-center gap-2.5">
-                    {business.logo_url ? (
-                      <img
-                        src={business.logo_url}
-                        alt={storeName}
-                        className="size-10 rounded-xl object-cover border border-white/20 bg-black/40 shadow-xs"
-                      />
-                    ) : (
-                      <span className="grid size-10 place-items-center rounded-xl border border-white/20 bg-black/40 text-xl shadow-xs">
-                        {stampEmoji}
-                      </span>
-                    )}
-                    <div>
-                      <span className="text-sm font-extrabold text-white tracking-wide block leading-tight">
-                        {stampEmoji} {storeName}
-                      </span>
-                      <span className="text-[10px] text-white/70 uppercase tracking-wider font-mono">
-                        {ar ? "بطاقة الولاء الرسمية" : "Official Pass"}
-                      </span>
-                    </div>
+                    <span className="grid size-9 place-items-center rounded-xl bg-black/30 border border-white/20 text-lg shadow-inner">
+                      {stampEmoji}
+                    </span>
+                    <span className="text-base font-extrabold text-white tracking-wide">
+                      {stampEmoji} {storeName}
+                    </span>
                   </div>
 
-                  <div className="rounded-full border border-white/20 bg-black/40 px-3 py-1 shadow-inner text-end">
+                  <div className="rounded-full border border-white/25 bg-black/35 px-3 py-1 shadow-inner text-end">
                     <span className="text-xs font-mono font-extrabold text-white">
                       {ar ? "الأختام: " : "STAMPS: "}
-                      <span className="text-emerald-300">1 / {targetStamps}</span>
+                      <span className="text-amber-200">1 / {targetStamps}</span>
                     </span>
                   </div>
                 </div>
@@ -618,24 +585,22 @@ function ClaimPage() {
                 {/* Pro SVG Strip Preview (if pro tier) */}
                 {business.templateMeta.tierMode === "pro" && stripSvg ? (
                   <div
-                    className="my-3 overflow-hidden rounded-2xl border border-white/15 shadow-inner"
+                    className="my-3 overflow-hidden rounded-2xl border border-white/20 shadow-inner"
                     dangerouslySetInnerHTML={{ __html: stripSvg }}
                   />
                 ) : (
-                  /* Visual Progress Section (STAMP PROGRESS) */
-                  <div className="my-4 space-y-2">
-                    <div className="flex items-center justify-between text-[11px] font-mono tracking-wider uppercase text-white/70">
+                  /* Card Visual Stamp Area (STAMP PROGRESS) */
+                  <div className="my-4 space-y-2.5">
+                    <div className="flex items-center justify-between text-[11px] font-mono tracking-wider uppercase text-white/80">
                       <span>
                         {ar ? `تقدم الأختام ${stampEmoji}` : `STAMP PROGRESS ${stampEmoji}`}
                       </span>
-                      <span className="text-emerald-300 font-bold">
-                        {ar
-                          ? `باقي ${targetStamps - 1} أختام للمكافأة`
-                          : `${targetStamps - 1} left for reward`}
+                      <span className="text-white font-bold">
+                        {ar ? `باقي ${targetStamps - 1} أختام` : `${targetStamps - 1} stamps left`}
                       </span>
                     </div>
 
-                    {/* Exact Visual Emoji Stamp Grid */}
+                    {/* Exact Visual Emoji Stamp Row matching Wallet pass */}
                     <div className="grid grid-cols-4 sm:grid-cols-5 gap-2 pt-1">
                       {Array.from({ length: targetStamps }).map((_, index) => {
                         const isFirst = index === 0;
@@ -645,11 +610,11 @@ function ClaimPage() {
                           return (
                             <div
                               key={index}
-                              className="relative flex aspect-square flex-col items-center justify-center rounded-2xl border-2 border-emerald-400 bg-emerald-500/30 text-xl shadow-[0_0_18px_rgba(16,185,129,0.4)] animate-pulse"
+                              className="relative flex aspect-square flex-col items-center justify-center rounded-2xl border-2 border-white bg-white/30 text-2xl shadow-[0_0_20px_rgba(255,255,255,0.4)] animate-pulse"
                             >
                               <span>{stampEmoji}</span>
-                              <span className="text-[8px] font-extrabold text-emerald-200 tracking-tighter">
-                                {ar ? "مجاناً!" : "FREE!"}
+                              <span className="text-[8px] font-black text-white bg-black/50 px-1.5 py-0.2 rounded-full uppercase tracking-tighter mt-0.5">
+                                {ar ? "مجاناً" : "1st FREE"}
                               </span>
                             </div>
                           );
@@ -659,10 +624,10 @@ function ClaimPage() {
                           return (
                             <div
                               key={index}
-                              className="flex aspect-square flex-col items-center justify-center rounded-2xl border border-amber-400/50 bg-black/40 text-xl text-amber-300 shadow-inner"
+                              className="flex aspect-square flex-col items-center justify-center rounded-2xl border border-amber-300/60 bg-black/40 text-xl text-amber-200 shadow-inner"
                             >
                               <span>🎁</span>
-                              <span className="text-[8px] font-bold text-amber-300">
+                              <span className="text-[8px] font-bold text-amber-200">
                                 {targetStamps}
                               </span>
                             </div>
@@ -672,10 +637,10 @@ function ClaimPage() {
                         return (
                           <div
                             key={index}
-                            className="flex aspect-square flex-col items-center justify-center rounded-2xl border border-white/15 bg-black/30 text-base text-white/50 shadow-inner"
+                            className="flex aspect-square flex-col items-center justify-center rounded-2xl border border-white/20 bg-black/25 text-base text-white/60 shadow-inner"
                           >
                             <span>⚪</span>
-                            <span className="text-[8px] font-mono text-white/40">{index + 1}</span>
+                            <span className="text-[8px] font-mono text-white/60">{index + 1}</span>
                           </div>
                         );
                       })}
@@ -683,80 +648,35 @@ function ClaimPage() {
                   </div>
                 )}
 
-                {/* Card Bottom Row: Reward & Remaining */}
-                <div className="pt-3 border-t border-white/10 flex items-center justify-between text-xs text-white">
+                {/* Card Footer Row */}
+                <div className="pt-3 border-t border-white/15 flex items-center justify-between text-xs text-white">
                   <div className="flex items-center gap-1.5 truncate max-w-[65%]">
                     <Gift className="size-3.5 text-amber-300 shrink-0" />
-                    <span className="truncate font-semibold text-white/95">{storeOffer}</span>
+                    <span className="truncate font-bold text-white">{storeOffer}</span>
                   </div>
-                  <div className="text-end font-mono text-[11px] text-white/80 shrink-0">
+                  <div className="text-end font-mono text-[11px] text-white/90 shrink-0 font-semibold">
                     <span>
-                      {ar ? `باقي ${targetStamps - 1} 🎁` : `${targetStamps - 1} to unlock 🎁`}
+                      {ar ? `باقي ${targetStamps - 1} أختام` : `${targetStamps - 1} stamps left 🎁`}
                     </span>
                   </div>
                 </div>
               </div>
 
-              {/* D. 3-STEP MICRO EXPLAINER (Why & How It Works in 2 Seconds) */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-start">
-                <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/60 p-3 shadow-xs">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-base">📲</span>
-                    <span className="text-xs font-bold text-zinc-200">
-                      {ar ? "بدون تطبيق" : "No App Download"}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-zinc-400 leading-tight">
-                    {ar
-                      ? "تُحفظ مباشرة في محفظة آبل أو جوجل بضغطة واحدة."
-                      : "Saves directly to Apple Wallet or Google Wallet in 1 tap."}
-                  </p>
-                </div>
-
-                <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/60 p-3 shadow-xs">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-base">⚡</span>
-                    <span className="text-xs font-bold text-zinc-200">
-                      {ar ? "مسح في ثانية" : "1-Second Scan"}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-zinc-400 leading-tight">
-                    {ar
-                      ? "اعرض بطاقتك أو اذكر رقم جوالك لدى الكاشير لجمع الأختام."
-                      : "Show pass or give phone number at cashier to collect stamps."}
-                  </p>
-                </div>
-
-                <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/60 p-3 shadow-xs">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-base">🎁</span>
-                    <span className="text-xs font-bold text-zinc-200">
-                      {ar ? "مكافأة فورية" : "Instant Rewards"}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-zinc-400 leading-tight">
-                    {ar
-                      ? `اجمع ${targetStamps} أختام واستلم ${storeOffer} تلقائياً.`
-                      : `Collect ${targetStamps} stamps and claim your reward automatically.`}
-                  </p>
-                </div>
-              </div>
-
-              {/* E. UNIFIED, SINGLE-ACTION CLAIM BOX */}
-              <div className="rounded-3xl border border-zinc-800/90 bg-zinc-900/90 p-5 sm:p-6 shadow-2xl backdrop-blur-xl">
+              {/* 3. CLEAN, SEAMLESS CLAIM CARD RIGHT UNDERNEATH */}
+              <div className="rounded-3xl border border-white/10 bg-zinc-900/90 p-5 sm:p-6 shadow-2xl backdrop-blur-xl">
                 <form onSubmit={(e) => handleClaim(e, false)} className="space-y-4">
-                  {/* Phone Input with Phone Icon & Reassuring Helper */}
+                  {/* Phone Input with Dynamic Brand Focus */}
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between">
                       <Label
                         htmlFor="phone"
                         className="text-xs font-bold text-zinc-200 flex items-center gap-1.5"
                       >
-                        <Phone className="size-3.5 text-emerald-400" />
-                        <span>{ar ? "رقم الجوال لتثبيت رصيدك" : "Mobile Number"}</span>
+                        <Phone className="size-3.5" style={{ color: brandHex }} />
+                        <span>{ar ? "رقم الجوال" : "Your Mobile Number"}</span>
                       </Label>
-                      <span className="text-[10px] font-mono text-zinc-500">
-                        {ar ? "مطلوب للمزامنة" : "Required for backup"}
+                      <span className="text-[11px] font-medium text-zinc-400">
+                        {ar ? "يشمل ختم ترحيبي مجاني" : "Includes 1 free welcome stamp"}
                       </span>
                     </div>
 
@@ -768,47 +688,27 @@ function ClaimPage() {
                       placeholder="05XXXXXXXX"
                       value={phone}
                       onChange={(e) => {
-                        // Live Arabic-Indic numerals conversion (٠-٩ -> 0-9)
                         const cleaned = e.target.value.replace(/[٠-٩]/g, (d) =>
                           String("٠١٢٣٤٥٦٧٨٩".indexOf(d)),
                         );
                         setPhone(cleaned);
                       }}
-                      className="h-13 text-center text-lg font-mono font-bold tracking-widest bg-zinc-950/90 border-zinc-800 text-white placeholder:text-zinc-600 focus-visible:ring-emerald-500 rounded-2xl shadow-inner"
+                      className="h-13 text-center text-lg font-mono font-bold tracking-widest bg-zinc-950/90 border-zinc-800 text-white placeholder:text-zinc-600 rounded-2xl shadow-inner focus-visible:ring-2"
+                      style={{
+                        outlineColor: brandHex,
+                      }}
                       autoFocus
                     />
-
-                    <p className="text-[11px] text-zinc-400 leading-relaxed pt-0.5">
-                      {ar
-                        ? "أدخل رقم جوالك لحفظ ختمك المجاني الأول وضمان عدم ضياع نقاطك."
-                        : "Enter your mobile number to lock in your 1st free stamp & never lose your points."}
-                    </p>
                   </div>
 
-                  {/* Optional Compact Name Input */}
-                  <div className="space-y-1">
-                    <Label htmlFor="name" className="text-xs font-medium text-zinc-400">
-                      {ar ? "الاسم (اختياري)" : "Your Name (Optional)"}
-                    </Label>
-                    <Input
-                      id="name"
-                      type="text"
-                      placeholder={ar ? "مثال: محمد" : "e.g. Alex"}
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      className="h-10 bg-zinc-950/80 border-zinc-800 text-white placeholder:text-zinc-600 rounded-xl text-xs"
-                    />
-                  </div>
-
-                  {/* ONE UNMISTAKABLE PRIMARY CTA BUTTON */}
+                  {/* Primary CTA Button (Restaurant Brand Colored) */}
                   <Button
                     type="submit"
                     disabled={loading || !phone.trim()}
-                    className="h-14 w-full text-base font-extrabold rounded-2xl shadow-xl transition-all duration-200 active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
+                    className="h-14 w-full text-base font-extrabold rounded-2xl shadow-xl transition-all duration-200 active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 text-white border-0"
                     style={{
-                      backgroundColor: accentHex,
-                      color: "#09090b",
-                      boxShadow: `0 0 25px ${accentHex}40`,
+                      backgroundColor: brandHex,
+                      boxShadow: `0 8px 25px -4px ${brandHex}60`,
                     }}
                   >
                     {loading ? (
@@ -818,8 +718,8 @@ function ClaimPage() {
                         <Apple className="size-5" />
                         <span>
                           {ar
-                            ? `إضافة إلى Apple Wallet وتفعيل ختمك الأول (1/${targetStamps})`
-                            : `Add to Apple Wallet & Claim 1st Stamp (1/${targetStamps})`}
+                            ? `إضافة إلى Apple Wallet (ختمك 1/${targetStamps} جاهز)`
+                            : `Add to Apple Wallet (1/${targetStamps} Stamp Ready)`}
                         </span>
                       </>
                     ) : deviceOS === "android" ? (
@@ -827,24 +727,21 @@ function ClaimPage() {
                         <Smartphone className="size-5" />
                         <span>
                           {ar
-                            ? `إضافة إلى Google Wallet وتفعيل ختمك الأول (1/${targetStamps})`
-                            : `Add to Google Wallet & Claim 1st Stamp (1/${targetStamps})`}
+                            ? `إضافة إلى Google Wallet (ختمك 1/${targetStamps} جاهز)`
+                            : `Add to Google Wallet (1/${targetStamps} Stamp Ready)`}
                         </span>
                       </>
                     ) : (
-                      <>
-                        <Sparkles className="size-5" />
-                        <span>
-                          {ar
-                            ? `استلام بطاقتي وختمي المجاني الأول (1/${targetStamps}) ←`
-                            : `Claim My Card & 1st Free Stamp (1/${targetStamps}) →`}
-                        </span>
-                      </>
+                      <span>
+                        {ar
+                          ? `إضافة البطاقة واستلام ختمك المجاني الأول ←`
+                          : `Add Pass & Claim 1st Free Stamp →`}
+                      </span>
                     )}
                   </Button>
 
-                  {/* Subtle 1-Click Anonymous Skip Link */}
-                  <div className="text-center pt-0.5">
+                  {/* Subtle Instant Skip Link */}
+                  <div className="text-center pt-1">
                     <button
                       type="button"
                       disabled={loading}
@@ -852,61 +749,47 @@ function ClaimPage() {
                       className="text-xs text-zinc-400 hover:text-zinc-200 underline underline-offset-4 transition-colors cursor-pointer"
                     >
                       {ar
-                        ? "تخطي حفظ الرقم — إضافة البطاقة فوراً ←"
-                        : "Skip phone backup — add pass instantly →"}
+                        ? "أو الإضافة إلى المحفظة مباشرة بدون رقم جوال ←"
+                        : "Or add to Wallet without phone number →"}
                     </button>
                   </div>
-
-                  {/* Trust Micro-Copy */}
-                  <p className="text-center text-[11px] font-medium text-zinc-400 border-t border-zinc-800/60 pt-3">
-                    {ar
-                      ? "🔒 مجاني 100% • بدون تحميل تطبيق • يعمل مع محفظة آبل وجوجل"
-                      : "🔒 100% Free • No app required • Works in Apple & Google Wallet"}
-                  </p>
                 </form>
               </div>
             </div>
           ) : (
-            /* POST-CLAIM STATE: Celebration Banner, Apple/Google Wallet CTA & Built-In Web Pass */
-            <div className="space-y-5">
-              {/* Celebration Banner */}
-              <div
-                className={`rounded-3xl border p-5 text-center shadow-xl backdrop-blur-xl transition-all ${
-                  activePass.rewardUnlocked
-                    ? "border-amber-500/40 bg-amber-500/10 text-amber-200 shadow-amber-500/10"
-                    : activePass.isReturning
-                      ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300 shadow-emerald-500/10"
-                      : "border-emerald-500/40 bg-emerald-500/15 text-emerald-300 shadow-emerald-500/15"
-                }`}
-              >
-                <div className="mx-auto mb-2 flex size-12 items-center justify-center rounded-2xl bg-zinc-950/80 border border-zinc-800 text-2xl">
-                  {activePass.rewardUnlocked ? "🎁" : activePass.isReturning ? "👋" : "🎉"}
-                </div>
-                <h2 className="text-lg font-extrabold text-white">
+            /* POST-CLAIM STATE: Restaurant Header, Apple/Google Wallet CTA & Live Web Pass */
+            <div className="space-y-6">
+              {/* Restaurant Header */}
+              <div className="text-center space-y-2 pt-1">
+                {business.logo_url ? (
+                  <img
+                    src={business.logo_url}
+                    alt={storeName}
+                    className="size-16 rounded-2xl object-cover shadow-xl border border-white/10 mx-auto"
+                  />
+                ) : (
+                  <div
+                    className="size-16 rounded-2xl flex items-center justify-center text-3xl shadow-xl mx-auto border border-white/15"
+                    style={{
+                      background: `linear-gradient(135deg, ${brandHex} 0%, #18181b 100%)`,
+                    }}
+                  >
+                    <span>{stampEmoji}</span>
+                  </div>
+                )}
+                <h2 className="text-2xl font-extrabold text-white">{storeName}</h2>
+                <p className="text-xs text-zinc-300 font-medium">
                   {activePass.rewardUnlocked
                     ? ar
-                      ? "المكافأة جاهزة للاستبدال!"
-                      : "REWARD READY TO REDEEM!"
+                      ? "🎉 المكافأة جاهزة للاستبدال لدى الكاشير!"
+                      : "🎉 Your reward is ready to redeem at checkout!"
                     : activePass.isReturning
                       ? ar
-                        ? "أهلاً بعودتك!"
-                        : "Welcome Back!"
+                        ? `👋 أهلاً بعودتك! رصيدك الحالي: ${activePass.currentStamps} من ${activePass.stampsRequired} أختام.`
+                        : `👋 Welcome back! Balance: ${activePass.currentStamps} of ${activePass.stampsRequired} stamps.`
                       : ar
-                        ? `تم تفعيل ختمك الترحيبي بنجاح! (1/${activePass.stampsRequired})`
-                        : `Welcome Stamp Unlocked! (1/${activePass.stampsRequired})`}
-                </h2>
-                <p className="mt-1 text-xs text-zinc-300">
-                  {activePass.rewardUnlocked
-                    ? ar
-                      ? "اعرض هذه البطاقة أو الرمز أدناه للكاشير لاستلام مكافأتك فوراً."
-                      : "Show this pass or QR code below to the cashier to claim your reward."
-                    : activePass.isReturning
-                      ? ar
-                        ? `رصيدك الحالي: ${activePass.currentStamps} من ${activePass.stampsRequired} أختام.`
-                        : `Current Balance: ${activePass.currentStamps} / ${activePass.stampsRequired} stamps.`
-                      : ar
-                        ? `لديك الآن 1 من ${activePass.stampsRequired} أختام في برنامج ${storeName}.`
-                        : `You now have 1 of ${activePass.stampsRequired} stamps for ${storeName}.`}
+                        ? `تم تفعيل بطاقتك بنجاح! ختمك الترحيبي الأول جاهز (1/${activePass.stampsRequired}).`
+                        : `Pass active! Your 1st welcome stamp is ready (1/${activePass.stampsRequired}).`}
                 </p>
               </div>
 
@@ -914,9 +797,9 @@ function ClaimPage() {
               {activePass.pkpassUrl ? (
                 <a
                   href={activePass.pkpassUrl}
-                  className="group flex h-14 w-full items-center justify-center gap-3 rounded-2xl bg-black border border-zinc-700/80 text-white font-bold text-base shadow-xl hover:bg-zinc-900 transition-all active:scale-[0.98]"
+                  className="group flex h-14 w-full items-center justify-center gap-3 rounded-2xl bg-black border border-zinc-700 text-white font-bold text-base shadow-xl hover:bg-zinc-900 transition-all active:scale-[0.98]"
                   style={{
-                    boxShadow: `0 0 25px ${accentHex}30, 0 4px 20px rgba(0,0,0,0.5)`,
+                    boxShadow: `0 8px 25px -4px ${brandHex}40`,
                   }}
                 >
                   {isAppleDevice ? (
@@ -931,27 +814,28 @@ function ClaimPage() {
                     </>
                   )}
                 </a>
-              ) : (
-                <div className="flex items-center justify-center gap-2 rounded-2xl border border-zinc-800 bg-zinc-900/60 p-3 text-xs text-zinc-400">
-                  <ShieldCheck className="size-4 text-emerald-400" />
-                  <span>
-                    {ar
-                      ? "البطاقة الرقمية نشطة — جاهزة للمسح أدناه"
-                      : "Web Pass Active — Ready to Scan Below"}
-                  </span>
-                </div>
-              )}
+              ) : null}
 
-              {/* Built-in Live Web Pass Card (Android & Universal Scannable Pass) */}
+              {/* Built-in Live Web Pass Card */}
               <div
-                className={`relative overflow-hidden rounded-3xl border border-zinc-800/80 bg-zinc-900/95 p-5 sm:p-6 shadow-2xl backdrop-blur-xl space-y-5 text-center transition-all ${
-                  stampPulsing ? "ring-4 ring-emerald-500/40 shadow-emerald-500/20" : ""
+                className={`relative overflow-hidden rounded-3xl border border-white/10 bg-zinc-900/95 p-5 sm:p-6 shadow-2xl backdrop-blur-xl space-y-5 text-center transition-all ${
+                  stampPulsing ? "ring-4 shadow-xl" : ""
                 }`}
+                style={
+                  stampPulsing
+                    ? {
+                        boxShadow: `0 0 0 4px ${brandHex}88`,
+                      }
+                    : undefined
+                }
               >
-                {/* Store Branding Inside Web Pass */}
-                <div className="flex items-center justify-between border-b border-zinc-800/60 pb-3.5">
+                {/* Store Top Bar */}
+                <div className="flex items-center justify-between border-b border-zinc-800/80 pb-3.5">
                   <div className="flex items-center gap-2.5 text-start">
-                    <span className="grid size-10 place-items-center rounded-xl bg-zinc-950 border border-zinc-800 text-xl">
+                    <span
+                      className="grid size-10 place-items-center rounded-xl text-xl shadow-xs"
+                      style={{ backgroundColor: `${brandHex}33` }}
+                    >
                       {stampEmoji}
                     </span>
                     <div>
@@ -968,7 +852,8 @@ function ClaimPage() {
                     title={ar ? "تحديث الرصيد" : "Refresh balance"}
                   >
                     <RefreshCw
-                      className={`size-3.5 text-emerald-400 ${refreshing ? "animate-spin" : ""}`}
+                      className={`size-3.5 ${refreshing ? "animate-spin" : ""}`}
+                      style={{ color: brandHex }}
                     />
                     <span>{ar ? "تحديث" : "Refresh"}</span>
                   </button>
@@ -980,7 +865,7 @@ function ClaimPage() {
                     <span className="font-bold text-zinc-200">
                       {ar ? "رصيد الأختام الحالي" : "Current Stamp Balance"}
                     </span>
-                    <span className="font-mono font-extrabold text-sm" style={{ color: accentHex }}>
+                    <span className="font-mono font-extrabold text-sm" style={{ color: brandHex }}>
                       {activePass.currentStamps} / {activePass.stampsRequired}
                     </span>
                   </div>
@@ -994,10 +879,14 @@ function ClaimPage() {
                         return (
                           <div
                             key={i}
-                            className="flex aspect-square flex-col items-center justify-center rounded-2xl border border-emerald-400/80 bg-emerald-500/25 text-lg shadow-[0_0_12px_rgba(16,185,129,0.25)] transition-all"
+                            className="flex aspect-square flex-col items-center justify-center rounded-2xl border text-lg transition-all text-white shadow-md"
+                            style={{
+                              backgroundColor: brandHex,
+                              borderColor: brandHex,
+                            }}
                           >
                             <span>{stampEmoji}</span>
-                            <span className="text-[9px] font-bold text-emerald-300">{i + 1}</span>
+                            <span className="text-[9px] font-bold text-white/90">{i + 1}</span>
                           </div>
                         );
                       }
@@ -1053,9 +942,9 @@ function ClaimPage() {
                 </div>
 
                 {/* Scannable High-Contrast QR Code */}
-                <div className="space-y-2.5 pt-1">
+                <div className="space-y-2 pt-1">
                   <div className="inline-block rounded-3xl bg-white p-3.5 shadow-xl">
-                    <LocalQrCode text={activePass.passSerial} size={210} />
+                    <LocalQrCode text={activePass.passSerial} size={200} />
                   </div>
                   <p className="text-xs text-zinc-400 font-medium">
                     {ar
@@ -1083,8 +972,8 @@ function ClaimPage() {
                     >
                       {copied ? (
                         <>
-                          <Check className="size-3.5 text-emerald-400" />
-                          <span className="text-emerald-400">{ar ? "تم" : "Copied"}</span>
+                          <Check className="size-3.5" style={{ color: brandHex }} />
+                          <span style={{ color: brandHex }}>{ar ? "تم" : "Copied"}</span>
                         </>
                       ) : (
                         <>
@@ -1105,7 +994,8 @@ function ClaimPage() {
                   className="w-full h-11 rounded-xl border-zinc-800 bg-zinc-950 text-xs font-semibold text-zinc-300 hover:bg-zinc-900 hover:text-white cursor-pointer"
                 >
                   <RefreshCw
-                    className={`me-2 size-3.5 text-emerald-400 ${refreshing ? "animate-spin" : ""}`}
+                    className={`me-2 size-3.5 ${refreshing ? "animate-spin" : ""}`}
+                    style={{ color: brandHex }}
                   />
                   {ar ? "تحديث الرصيد الآن ↻" : "Refresh Balance Now ↻"}
                 </Button>
@@ -1127,11 +1017,10 @@ function ClaimPage() {
           )}
         </main>
 
-        {/* F. FOOTER: PointPass Branding */}
-        <footer className="mt-auto pt-6 pb-3 text-center text-xs text-zinc-500 font-medium">
+        {/* Minimal Footer */}
+        <footer className="mt-auto pt-6 pb-2 text-center text-xs text-zinc-600 font-medium">
           <p>
-            {ar ? "مدعوم بواسطة " : "Powered by "}
-            <span className="font-bold text-zinc-300">PointPass</span>
+            Powered by <span className="text-zinc-400 font-semibold">PointPass</span>
           </p>
         </footer>
       </div>
