@@ -10,7 +10,14 @@ import {
   resolveColorPreset,
   type WalletPassState,
 } from "@/lib/wallet-payload";
-import { parsePassTemplateMeta, iconToEmoji } from "@/lib/wallet-tier";
+import {
+  parsePassTemplateMeta,
+  iconToEmoji,
+  WALLET_COLOR_PRESETS,
+  type StripStyle,
+  type WalletColorPreset,
+  type WalletTierMode,
+} from "@/lib/wallet-tier";
 import { generateStampStripDataUri, resolveStampIcon } from "@/lib/strip-generator";
 import { captureAppError } from "@/lib/observability";
 
@@ -122,10 +129,7 @@ async function walletFetch(
   }
 
   // 1-time automatic retry with 600ms delay on 429 rate limit, 5xx, or network failure
-  if (
-    retryCount < 1 &&
-    (isNetworkError || (res && (res.status === 429 || res.status >= 500)))
-  ) {
+  if (retryCount < 1 && (isNetworkError || (res && (res.status === 429 || res.status >= 500)))) {
     await new Promise((resolve) => setTimeout(resolve, 600));
     return walletFetch(method, path, body, retryCount + 1);
   }
@@ -170,9 +174,228 @@ async function walletFetch(
   return { ok: true, status: res.status, error: null, data };
 }
 
+export function normalizePhoneNumber(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  // 1. Convert Arabic-Indic numerals ٠-٩ to western 0-9
+  let cleaned = raw.replace(/[٠-٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)));
+  // 2. Strip spaces, dashes, parens, dots, slashes, non-digits (preserving leading + if any)
+  cleaned = cleaned.trim().replace(/[^0-9+]/g, "");
+  if (!cleaned) return null;
+
+  // 3. Saudi mobile normalization (E.164 canonical: +9665XXXXXXXX)
+  // Form: 05xxxxxxxx (10 digits)
+  if (/^05[0-9]{8}$/.test(cleaned)) {
+    return "+9665" + cleaned.slice(2);
+  }
+  // Form: 5xxxxxxxx (9 digits)
+  if (/^5[0-9]{8}$/.test(cleaned)) {
+    return "+9665" + cleaned.slice(1);
+  }
+  // Form: 9665xxxxxxxx (12 digits)
+  if (/^9665[0-9]{8}$/.test(cleaned)) {
+    return "+" + cleaned;
+  }
+  // Form: 009665xxxxxxxx (14 digits)
+  if (/^009665[0-9]{8}$/.test(cleaned)) {
+    return "+9665" + cleaned.slice(6);
+  }
+  // Form: +9665xxxxxxxx (13 chars)
+  if (/^\+9665[0-9]{8}$/.test(cleaned)) {
+    return cleaned;
+  }
+  // Valid international E.164: + followed by 7-15 digits
+  if (/^\+[1-9][0-9]{6,14}$/.test(cleaned)) {
+    return cleaned;
+  }
+  // 00 followed by country code + digits
+  if (/^00[1-9][0-9]{6,14}$/.test(cleaned)) {
+    return "+" + cleaned.slice(2);
+  }
+
+  return cleaned;
+}
+
+export const normalizeCustomerPhone = normalizePhoneNumber;
+
+const publicBusinessSchema = z.object({
+  slug: z.string().min(1).max(64),
+});
+
+export const getPublicBusinessBySlug = createServerFn({ method: "GET" })
+  .validator((d: unknown) => publicBusinessSchema.parse(d))
+  .handler(async ({ data }) => {
+    const admin = createAdminSupabaseClient();
+    const supabase = createServerSupabaseClient();
+    const db = admin ?? supabase;
+    const cleanSlug = data.slug.toLowerCase().trim();
+
+    let biz: Record<string, unknown> | null = null;
+    try {
+      const { data: row } = await db
+        .from("businesses")
+        .select(
+          "id,slug,name_ar,name_en,logo_url,brand_color,accent_color,program_type,offer_ar,offer_en,target_stamps,template_id,status",
+        )
+        .eq("slug", cleanSlug)
+        .maybeSingle();
+      if (row) {
+        biz = row;
+      }
+    } catch {
+      // Direct query fallback
+    }
+
+    if (!biz) {
+      try {
+        const { data: rpcRow } = await supabase
+          .rpc("get_public_business_by_slug", { _slug: cleanSlug })
+          .maybeSingle();
+        if (rpcRow) {
+          biz = rpcRow as Record<string, unknown>;
+        }
+      } catch {
+        // RPC fallback
+      }
+    }
+
+    if (!biz) {
+      return {
+        ok: false as const,
+        error: "Business not found or inactive",
+        business: null,
+      };
+    }
+
+    const rawTemplateId = (biz["template_id"] as string) ?? null;
+    const templateMeta = parsePassTemplateMeta(rawTemplateId);
+    const targetStamps = Number(biz["target_stamps"] || 8);
+    const brandColor = (biz["brand_color"] as string) || "#121214";
+    const accentColor = (biz["accent_color"] as string) || "#10B981";
+
+    const presetInfo = WALLET_COLOR_PRESETS[templateMeta.colorPreset] ?? WALLET_COLOR_PRESETS.green;
+    const resolvedAccentHex = presetInfo?.accent || accentColor;
+    const resolvedBrandHex = presetInfo?.hex || brandColor;
+
+    return {
+      ok: true as const,
+      error: null,
+      business: {
+        id: (biz["id"] as string) || "",
+        name: (biz["name_ar"] as string) || (biz["name_en"] as string) || cleanSlug,
+        name_ar: (biz["name_ar"] as string) || "",
+        name_en: (biz["name_en"] as string) || "",
+        slug: (biz["slug"] as string) || cleanSlug,
+        offer_ar: (biz["offer_ar"] as string) || "",
+        offer_en: (biz["offer_en"] as string) || "",
+        target_stamps: targetStamps,
+        stamps_required: targetStamps,
+        brand_color: brandColor,
+        accent_color: accentColor,
+        logo_url: (biz["logo_url"] as string) || null,
+        template_id: rawTemplateId,
+        program_type: (biz["program_type"] as string) || "stamp",
+        templateMeta: {
+          ...templateMeta,
+          stampEmoji: iconToEmoji(templateMeta.stampIcon),
+          accentHex: resolvedAccentHex,
+          brandHex: resolvedBrandHex,
+        },
+      },
+    };
+  });
+
+const refreshPassSchema = z.object({
+  slug: z.string().min(1).max(64),
+  passSerial: z.string().min(1).max(128),
+});
+
+export const refreshCustomerPassStatus = createServerFn({ method: "POST" })
+  .validator((d: unknown) => refreshPassSchema.parse(d))
+  .handler(async ({ data }) => {
+    const admin = createAdminSupabaseClient();
+    const supabase = createServerSupabaseClient();
+    const db = admin ?? supabase;
+
+    const cleanSerial = data.passSerial.trim();
+    const cleanSlug = data.slug.toLowerCase().trim();
+
+    try {
+      const { data: passRow, error } = await db
+        .from("pass_instances")
+        .select(
+          `
+          serial,
+          stamps,
+          points,
+          program_type,
+          wallet_serial,
+          last_visit_at,
+          created_at,
+          businesses!inner(id, slug, target_stamps, offer_ar, offer_en)
+        `,
+        )
+        .eq("serial", cleanSerial)
+        .eq("businesses.slug", cleanSlug)
+        .maybeSingle();
+
+      if (error || !passRow) {
+        return {
+          ok: false as const,
+          error: "Pass not found",
+          currentStamps: 0,
+          stampsRequired: 8,
+          rewardUnlocked: false,
+          pkpassUrl: null,
+          updatedAt: null,
+          programType: "stamp",
+          points: 0,
+        };
+      }
+
+      const biz = passRow.businesses as unknown as {
+        target_stamps?: number | null;
+        offer_ar?: string | null;
+        offer_en?: string | null;
+      };
+
+      const stampsRequired = Number(biz?.target_stamps || 8);
+      const currentStamps = Math.max(1, passRow.stamps ?? 1);
+      const rewardUnlocked = currentStamps >= stampsRequired;
+      const pkpassUrl = passRow.wallet_serial
+        ? `https://walletwallet.dev/p/${passRow.wallet_serial}`
+        : null;
+
+      return {
+        ok: true as const,
+        error: null,
+        passSerial: passRow.serial,
+        currentStamps,
+        stampsRequired,
+        rewardUnlocked,
+        pkpassUrl,
+        updatedAt: passRow.last_visit_at || passRow.created_at || new Date().toISOString(),
+        programType: passRow.program_type,
+        points: passRow.points ?? 0,
+      };
+    } catch (err) {
+      return {
+        ok: false as const,
+        error: err instanceof Error ? err.message : "Failed to refresh balance",
+        currentStamps: 0,
+        stampsRequired: 8,
+        rewardUnlocked: false,
+        pkpassUrl: null,
+        updatedAt: null,
+        programType: "stamp",
+        points: 0,
+      };
+    }
+  });
+
 const createPassSchema = z.object({
   slug: z.string().min(1).max(64),
-  phone: z.string().trim().max(30).optional().nullable(),
+  phone: z.string().trim().max(40).optional().nullable(),
+  customerName: z.string().trim().max(100).optional().nullable(),
   brandColor: z.string().optional().nullable(),
   accentColor: z.string().optional().nullable(),
   templateId: z.string().optional().nullable(),
@@ -184,7 +407,7 @@ export const createWalletPass = createServerFn({ method: "POST" })
   .validator((d: unknown) => createPassSchema.parse(d))
   .handler(async ({ data }) => {
     const supabase = createServerSupabaseClient();
-    const cleanPhone = data.phone?.trim() ? data.phone.trim() : null;
+    const cleanPhone = normalizePhoneNumber(data.phone);
 
     // Caller-scoped rate limit for anonymous claims (where phone is null)
     if (!cleanPhone && !checkAnonClaimRateLimit()) {
@@ -221,6 +444,30 @@ export const createWalletPass = createServerFn({ method: "POST" })
       is_resumed: boolean;
     } | null;
     if (!claim) throw new Error("Pass registration returned no result");
+
+    const isReturning = Boolean(claim.is_resumed);
+    let effectiveSerial = claim.pass_serial;
+
+    // For brand-new passes, ensure the serial has the canonical PP- prefix
+    if (!isReturning && !effectiveSerial.startsWith("PP-")) {
+      const candidateSerial = `PP-${effectiveSerial
+        .replace(/[^a-zA-Z0-9]/g, "")
+        .slice(0, 8)
+        .toUpperCase()}`;
+      try {
+        const admin = createAdminSupabaseClient();
+        const db = admin ?? supabase;
+        const { error: updateErr } = await db
+          .from("pass_instances")
+          .update({ serial: candidateSerial })
+          .eq("serial", claim.pass_serial);
+        if (!updateErr) {
+          effectiveSerial = candidateSerial;
+        }
+      } catch (err) {
+        console.warn("Could not format serial as PP-:", err);
+      }
+    }
 
     // Query business visual branding (colors, logo, template metadata, offer texts)
     // First try direct table query; if blocked under anon RLS, fall back to get_public_business_by_slug RPC
@@ -282,6 +529,10 @@ export const createWalletPass = createServerFn({ method: "POST" })
         ? templateMeta.colorPreset
         : resolveColorPreset(effectiveBrandColor, effectiveAccentColor);
 
+    const presetInfo = WALLET_COLOR_PRESETS[templateMeta.colorPreset] ?? WALLET_COLOR_PRESETS.green;
+    const resolvedAccentHex = presetInfo?.accent || effectiveAccentColor || "#10B981";
+    const resolvedBrandHex = presetInfo?.hex || effectiveBrandColor || "#121214";
+
     const targetStamps = claim.business_target_stamps || 8;
     const isStampCard =
       claim.pass_program_type === "stamp" || claim.pass_program_type === "coupon_morph";
@@ -291,13 +542,12 @@ export const createWalletPass = createServerFn({ method: "POST" })
     if (isStampCard && currentStamps === 0) {
       currentStamps = 1;
       try {
-        await supabase.rpc("grant_welcome_stamp", { _pass_serial: claim.pass_serial });
+        await supabase.rpc("grant_welcome_stamp", { _pass_serial: effectiveSerial });
       } catch (rpcErr) {
         try {
-          await supabase
-            .from("pass_instances")
-            .update({ stamps: 1 })
-            .eq("serial", claim.pass_serial);
+          const admin = createAdminSupabaseClient();
+          const db = admin ?? supabase;
+          await db.from("pass_instances").update({ stamps: 1 }).eq("serial", effectiveSerial);
         } catch (directErr) {
           console.warn("Welcome stamp initialization note:", directErr ?? rpcErr);
         }
@@ -350,7 +600,7 @@ export const createWalletPass = createServerFn({ method: "POST" })
 
     // Build payload using actual loyalty state (never 0 if resumed)
     const passState: WalletPassState = {
-      serial: claim.pass_serial,
+      serial: effectiveSerial,
       businessName: claim.business_name,
       offer: passOffer,
       programType: claim.pass_program_type,
@@ -414,22 +664,41 @@ export const createWalletPass = createServerFn({ method: "POST" })
       }
     }
 
+    const rewardUnlocked = currentStamps >= targetStamps;
+
     if (!result.ok) {
-      // Graceful fallback so the claim flow stays usable while credentials pend.
+      // Graceful fallback so the claim flow stays usable while credentials pend or in offline/dev mode
       return {
-        ok: false,
-        error: result.error,
-        isResumed: claim.is_resumed,
+        ok: true,
+        walletError: result.error,
+        error: null as string | null,
+        passSerial: effectiveSerial,
+        currentStamps,
+        stampsRequired: targetStamps,
+        isReturning,
+        customerName: data.customerName || null,
+        customerPhone: cleanPhone,
+        pkpassUrl: null as string | null,
+        rewardUnlocked,
+        offerAr: biz?.offer_ar || data.offerAr || "",
+        offerEn: biz?.offer_en || data.offerEn || "",
+        templateMeta: {
+          ...templateMeta,
+          stampEmoji: iconToEmoji(templateMeta.stampIcon),
+          accentHex: resolvedAccentHex,
+          brandHex: resolvedBrandHex,
+        },
+        appleUrl: null as string | null,
+        googleUrl: null as string | null,
+        isResumed: isReturning,
         alreadyEnrolled: false,
         programType: claim.pass_program_type,
         stamps: currentStamps,
-        points: claim.pass_points,
-        morphed: claim.pass_morphed,
-        targetStamps: claim.business_target_stamps,
+        points: claim.pass_points ?? 0,
+        morphed: claim.pass_morphed ?? false,
+        targetStamps,
         sarPerPoint: claim.business_sar_per_point,
         pointsPerReward: claim.business_points_per_reward,
-        appleUrl: null as string | null,
-        googleUrl: null as string | null,
       };
     }
 
@@ -439,30 +708,23 @@ export const createWalletPass = createServerFn({ method: "POST" })
       shareUrl?: string;
     } | null;
 
-    if (!claim.pass_wallet_serial) {
-      if (!payload?.serialNumber || !payload?.shareUrl) {
-        return {
-          ok: false,
-          error: "WalletWallet returned an incomplete pass response",
-          isResumed: claim.is_resumed,
-          alreadyEnrolled: false,
-          programType: claim.pass_program_type,
-          stamps: currentStamps,
-          points: claim.pass_points,
-          morphed: claim.pass_morphed,
-          targetStamps: claim.business_target_stamps,
-          sarPerPoint: claim.business_sar_per_point,
-          pointsPerReward: claim.business_points_per_reward,
-          appleUrl: null,
-          googleUrl: null,
-        };
-      }
-
+    if (!claim.pass_wallet_serial && payload?.serialNumber) {
       const { error: attachError } = await supabase.rpc("attach_wallet_serial", {
-        _pass_serial: claim.pass_serial,
+        _pass_serial: effectiveSerial,
         _wallet_serial: payload.serialNumber,
       });
-      if (attachError) throw new Error(attachError.message);
+      if (attachError) {
+        try {
+          const admin = createAdminSupabaseClient();
+          const db = admin ?? supabase;
+          await db
+            .from("pass_instances")
+            .update({ wallet_serial: payload.serialNumber })
+            .eq("serial", effectiveSerial);
+        } catch {
+          // ignore
+        }
+      }
     }
 
     const shareUrl =
@@ -473,19 +735,37 @@ export const createWalletPass = createServerFn({ method: "POST" })
     return {
       ok: true,
       error: null as string | null,
-      isResumed: claim.is_resumed,
+      passSerial: effectiveSerial,
+      currentStamps,
+      stampsRequired: targetStamps,
+      isReturning,
+      customerName: data.customerName || null,
+      customerPhone: cleanPhone,
+      pkpassUrl: shareUrl,
+      rewardUnlocked,
+      offerAr: biz?.offer_ar || data.offerAr || "",
+      offerEn: biz?.offer_en || data.offerEn || "",
+      templateMeta: {
+        ...templateMeta,
+        stampEmoji: iconToEmoji(templateMeta.stampIcon),
+        accentHex: resolvedAccentHex,
+        brandHex: resolvedBrandHex,
+      },
+      appleUrl: shareUrl,
+      googleUrl,
+      isResumed: isReturning,
       alreadyEnrolled: false,
       programType: claim.pass_program_type,
       stamps: currentStamps,
-      points: claim.pass_points,
-      morphed: claim.pass_morphed,
-      targetStamps: claim.business_target_stamps,
+      points: claim.pass_points ?? 0,
+      morphed: claim.pass_morphed ?? false,
+      targetStamps,
       sarPerPoint: claim.business_sar_per_point,
       pointsPerReward: claim.business_points_per_reward,
-      appleUrl: shareUrl,
-      googleUrl,
     };
   });
+
+export const claimCustomerPass = createWalletPass;
 
 const updatePassSchema = z.object({
   slug: z.string().min(1).max(64),
@@ -660,18 +940,10 @@ export const updateWalletPass = createServerFn({ method: "POST" })
       state.pass_program_type === "stamp" || state.pass_program_type === "coupon_morph";
 
     const passBusinessName =
-      biz?.name_ar ||
-      biz?.name_en ||
-      data.businessName ||
-      state.business_name ||
-      "Loyalty Pass";
+      biz?.name_ar || biz?.name_en || data.businessName || state.business_name || "Loyalty Pass";
 
     const passOffer =
-      biz?.offer_ar ||
-      biz?.offer_en ||
-      data.offerText ||
-      state.business_offer ||
-      "Special Reward";
+      biz?.offer_ar || biz?.offer_en || data.offerText || state.business_offer || "Special Reward";
 
     const icon =
       templateMeta.stampIcon !== "star"
@@ -817,7 +1089,11 @@ function normalizeScannedQuery(raw: string): string {
 const lookupCustomerSchema = z.object({
   slug: z.string().min(1).max(64),
   query: z.string().min(1).max(256),
-  cashierSession: z.string().regex(/^[a-f0-9]{64}$/).optional().nullable(),
+  cashierSession: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .optional()
+    .nullable(),
 });
 
 export const lookupCustomerPass = createServerFn({ method: "POST" })
@@ -834,7 +1110,8 @@ export const lookupCustomerPass = createServerFn({ method: "POST" })
       try {
         let passQuery = admin
           .from("pass_instances")
-          .select(`
+          .select(
+            `
             serial,
             stamps,
             points,
@@ -844,12 +1121,17 @@ export const lookupCustomerPass = createServerFn({ method: "POST" })
             phone,
             created_at,
             businesses!inner(id, slug, name_ar, name_en, offer_ar, offer_en, target_stamps)
-          `)
+          `,
+          )
           .eq("businesses.slug", data.slug);
 
         if (isPhone) {
+          const normalized = normalizePhoneNumber(cleanQuery);
           const digitsOnly = cleanQuery.replace(/[^0-9]/g, "");
-          passQuery = passQuery.or(`phone.eq.${cleanQuery},phone.ilike.%${digitsOnly.slice(-9)}%`);
+          const orFilter = normalized
+            ? `phone.eq.${cleanQuery},phone.eq.${normalized},phone.ilike.%${digitsOnly.slice(-9)}%`
+            : `phone.eq.${cleanQuery},phone.ilike.%${digitsOnly.slice(-9)}%`;
+          passQuery = passQuery.or(orFilter);
         } else {
           passQuery = passQuery.or(`serial.eq.${cleanQuery},wallet_serial.eq.${cleanQuery}`);
         }
@@ -1011,7 +1293,8 @@ export const unlockCashierTerminal = createServerFn({ method: "POST" })
     try {
       const { data: staffMembers } = await supabase
         .from("staff_members")
-        .select(`
+        .select(
+          `
           id,
           name_ar,
           name_en,
@@ -1020,7 +1303,8 @@ export const unlockCashierTerminal = createServerFn({ method: "POST" })
           assignments:staff_branch_assignments(
             branch:branches(id, code, name_ar, name_en)
           )
-        `)
+        `,
+        )
         .eq("business.slug", cleanSlug)
         .eq("status", "active");
 

@@ -49,7 +49,7 @@ import { generateStampStripSvgDataUri } from "@/lib/strip-svg";
 export const Route = createFileRoute("/admin")({
   head: () => ({
     meta: [
-      { title: "Super Admin — Wallet Loyalty Platform" },
+      { title: "Super Admin — PointPass Platform" },
       {
         name: "description",
         content: "Manage tenant restaurants, platform analytics, hardware dispatch and domains.",

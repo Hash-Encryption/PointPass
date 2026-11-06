@@ -241,7 +241,7 @@ export function PlanBillingPanel({ businessId, ar }: PlanBillingPanelProps) {
         <div>
           <h3 className="text-base font-bold flex items-center gap-2">
             <Sparkles className="size-4 text-primary" />
-            {ar ? "باقات ولاء واليت" : "Wallet Loyalty Plans"}
+            {ar ? "باقات بوينت باس" : "PointPass Plans"}
           </h3>
           <p className="text-xs text-muted-foreground">
             {ar

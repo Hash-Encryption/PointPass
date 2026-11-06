@@ -5,7 +5,7 @@ export type Locale = "ar" | "en";
 type Dict = Record<string, { ar: string; en: string }>;
 
 export const strings = {
-  brand: { ar: "ولاء واليت", en: "Wallet Loyalty" },
+  brand: { ar: "بوينت باس", en: "PointPass" },
   tagline: {
     ar: "منصة بطاقات الولاء الرقمية للمطاعم والمقاهي في السعودية",
     en: "Digital wallet loyalty platform for Saudi restaurants & cafés",
@@ -139,8 +139,8 @@ export const strings = {
     en: "Complete Setup & Open Dashboard",
   },
   onboardingCompleted: {
-    ar: "تم إكمال الإعداد بنجاح! مرحباً بك في ولاء واليت.",
-    en: "Setup complete! Welcome to Wallet Loyalty.",
+    ar: "تم إكمال الإعداد بنجاح! مرحباً بك في بوينت باس.",
+    en: "Setup complete! Welcome to PointPass.",
   },
   settingsTab: { ar: "الإعدادات", en: "Settings" },
   growthTab: { ar: "البرنامج والنمو", en: "Program & Growth" },

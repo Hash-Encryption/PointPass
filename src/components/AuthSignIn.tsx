@@ -166,7 +166,7 @@ export function AuthSignIn({
                 PointPass<span className="text-emerald-400">.</span>
               </span>
               <span className="text-[10px] text-zinc-500 font-mono tracking-wide">
-                {ar ? "منصة ولاء المحافظ الرقمية" : "Apple Wallet Loyalty"}
+                {ar ? "منصة ولاء المحافظ الرقمية" : "Native Wallet Loyalty"}
               </span>
             </div>
           </div>

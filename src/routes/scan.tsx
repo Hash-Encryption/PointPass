@@ -85,11 +85,13 @@ type ActivePassSheet = {
   totalStamps?: number | undefined;
   justUpdated?: boolean | undefined;
   walletSynced?: boolean | undefined;
-  walletSync?: {
-    synced: boolean;
-    status: number;
-    error?: string | undefined;
-  } | undefined;
+  walletSync?:
+    | {
+        synced: boolean;
+        status: number;
+        error?: string | undefined;
+      }
+    | undefined;
   actionMessage?: string | undefined;
 };
 
@@ -1124,14 +1126,13 @@ export function CashierTerminal() {
                     >
                       {activePass.serial}
                     </span>
-                    {activePass.rewardsRedeemed !== undefined &&
-                      activePass.rewardsRedeemed > 0 && (
-                        <span className="text-[10px] text-amber-400">
-                          {ar
-                            ? `(${activePass.rewardsRedeemed} مكافأة مستلمة)`
-                            : `(${activePass.rewardsRedeemed} redeemed)`}
-                        </span>
-                      )}
+                    {activePass.rewardsRedeemed !== undefined && activePass.rewardsRedeemed > 0 && (
+                      <span className="text-[10px] text-amber-400">
+                        {ar
+                          ? `(${activePass.rewardsRedeemed} مكافأة مستلمة)`
+                          : `(${activePass.rewardsRedeemed} redeemed)`}
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1223,7 +1224,9 @@ export function CashierTerminal() {
             {/* Action Confirmation Banner */}
             {activePass.actionMessage && (
               <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-center space-y-1.5 animate-in fade-in duration-200">
-                <div className="text-xs text-emerald-300 font-medium">{activePass.actionMessage}</div>
+                <div className="text-xs text-emerald-300 font-medium">
+                  {activePass.actionMessage}
+                </div>
                 {activePass.walletSync && (
                   <div className="text-[11px] font-mono flex items-center justify-center gap-1.5 pt-1 border-t border-emerald-500/20">
                     {activePass.walletSync.synced ? (
@@ -1305,9 +1308,7 @@ export function CashierTerminal() {
                         onClick={() => void handleApplyAction("stamp", multiplier)}
                       >
                         <Plus className="size-3.5 me-1 text-emerald-400" />
-                        <span>
-                          {ar ? `+${multiplier} أختام` : `+${multiplier} Stamps`}
-                        </span>
+                        <span>{ar ? `+${multiplier} أختام` : `+${multiplier} Stamps`}</span>
                       </Button>
                     ))}
                   </div>
@@ -1471,7 +1472,9 @@ export function CashierTerminal() {
                   <div className="space-y-1">
                     <h2 className="text-base font-bold text-zinc-100 flex items-center gap-2">
                       <Search className="size-4 text-emerald-400" />
-                      <span>{ar ? "البحث برقم الجوال أو كود البطاقة" : "Phone or Pass Code Lookup"}</span>
+                      <span>
+                        {ar ? "البحث برقم الجوال أو كود البطاقة" : "Phone or Pass Code Lookup"}
+                      </span>
                     </h2>
                     <p className="text-xs text-zinc-400 leading-relaxed">
                       {ar
@@ -1485,9 +1488,7 @@ export function CashierTerminal() {
                       <Input
                         autoFocus
                         placeholder={
-                          ar
-                            ? "مثال: 0501234567 أو PP-482019"
-                            : "e.g., 0501234567 or PP-482019"
+                          ar ? "مثال: 0501234567 أو PP-482019" : "e.g., 0501234567 or PP-482019"
                         }
                         value={manualInput}
                         onChange={(e) => setManualInput(e.target.value)}

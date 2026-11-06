@@ -68,13 +68,13 @@ import { isOwner, isManager, isCashier, type OperationsAccess } from "@/lib/acce
 export const Route = createFileRoute("/dashboard")({
   head: () => ({
     meta: [
-      { title: "لوحة التاجر | Merchant Dashboard — Wallet Loyalty" },
+      { title: "لوحة التاجر | Merchant Dashboard — PointPass" },
       {
         name: "description",
         content:
           "Design wallet passes, run loyalty programs, manage cashier PINs, geofence alerts and push campaigns.",
       },
-      { property: "og:title", content: "Merchant Dashboard — Wallet Loyalty" },
+      { property: "og:title", content: "Merchant Dashboard — PointPass" },
       {
         property: "og:description",
         content: "Pass designer with live Apple & Google Wallet previews plus analytics.",
