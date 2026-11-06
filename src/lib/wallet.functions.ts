@@ -10,7 +10,7 @@ import {
   resolveColorPreset,
   type WalletPassState,
 } from "@/lib/wallet-payload";
-import { parsePassTemplateMeta } from "@/lib/wallet-tier";
+import { parsePassTemplateMeta, iconToEmoji } from "@/lib/wallet-tier";
 import { generateStampStripDataUri, resolveStampIcon } from "@/lib/strip-generator";
 import { captureAppError } from "@/lib/observability";
 
@@ -79,21 +79,35 @@ function getPublicStripUrl(
   }
 }
 
-async function walletFetch(method: "POST" | "PUT", path: string, body: unknown) {
+async function walletFetch(
+  method: "POST" | "PUT",
+  path: string,
+  body: unknown,
+  retryCount = 0,
+): Promise<{
+  ok: boolean;
+  status: number;
+  error: string | null;
+  data: unknown;
+}> {
   const apiKey = env.WALLETWALLET_API_KEY ?? process.env["WALLETWALLET_API_KEY"];
   const apiUrl = env.WALLETWALLET_API_URL ?? process.env["WALLETWALLET_API_URL"];
   if (!apiKey || !apiUrl) {
     return {
-      ok: false as const,
+      ok: false,
       status: 503,
       error: "WalletWallet server configuration is incomplete",
       data: null,
     };
   }
-  let res: Response;
-  let text: string;
+
+  const endpoint = `${apiUrl.replace(/\/$/, "")}${path}`;
+  let res: Response | null = null;
+  let text = "";
+  let isNetworkError = false;
+
   try {
-    res = await fetch(`${apiUrl.replace(/\/$/, "")}${path}`, {
+    res = await fetch(endpoint, {
       method,
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -103,14 +117,28 @@ async function walletFetch(method: "POST" | "PUT", path: string, body: unknown) 
     });
     text = await res.text();
   } catch {
+    isNetworkError = true;
     console.error(`WalletWallet ${path} failed [network]`);
+  }
+
+  // 1-time automatic retry with 600ms delay on 429 rate limit, 5xx, or network failure
+  if (
+    retryCount < 1 &&
+    (isNetworkError || (res && (res.status === 429 || res.status >= 500)))
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    return walletFetch(method, path, body, retryCount + 1);
+  }
+
+  if (isNetworkError || !res) {
     return {
-      ok: false as const,
+      ok: false,
       status: 502,
       error: "WalletWallet request failed (network)",
       data: null,
     };
   }
+
   if (!res.ok) {
     let errorDetail = `WalletWallet request failed (${res.status})`;
     try {
@@ -127,7 +155,7 @@ async function walletFetch(method: "POST" | "PUT", path: string, body: unknown) 
     }
     console.error(`WalletWallet ${path} failed [${res.status}]: ${errorDetail}`);
     return {
-      ok: false as const,
+      ok: false,
       status: res.status,
       error: errorDetail,
       data: null,
@@ -139,7 +167,7 @@ async function walletFetch(method: "POST" | "PUT", path: string, body: unknown) 
   } catch {
     data = text;
   }
-  return { ok: true as const, status: res.status, error: null, data };
+  return { ok: true, status: res.status, error: null, data };
 }
 
 const createPassSchema = z.object({
@@ -491,6 +519,8 @@ export const updateWalletPass = createServerFn({ method: "POST" })
   .validator((d: unknown) => updatePassSchema.parse(d))
   .handler(async ({ data }) => {
     const supabase = createServerSupabaseClient();
+    const admin = createAdminSupabaseClient();
+    const dbClient = admin ?? supabase;
     const repeatCount = data.action === "stamp" ? Math.min(20, Math.max(1, data.count ?? 1)) : 1;
 
     let actionData: CashierActionState | null = null;
@@ -528,21 +558,39 @@ export const updateWalletPass = createServerFn({ method: "POST" })
 
     const state: CashierActionState = actionData;
 
-    if (!state?.wallet_serial) {
+    let walletSerial = state?.wallet_serial;
+    if (!walletSerial && admin && state?.pass_serial) {
+      try {
+        const { data: pInst } = await admin
+          .from("pass_instances")
+          .select("wallet_serial")
+          .eq("serial", state.pass_serial)
+          .maybeSingle();
+        if (pInst?.wallet_serial) {
+          walletSerial = pInst.wallet_serial;
+        }
+      } catch {
+        // Fallback
+      }
+    }
+
+    if (!walletSerial) {
       return {
         ok: false as const,
         recorded: true as const,
+        sessionExpired: false as const,
         error: "Wallet pass is not attached",
         stamps: state?.pass_stamps,
         points: state?.pass_points,
         morphed: state?.pass_morphed,
         programType: state?.pass_program_type,
         targetStamps: state?.business_target_stamps,
+        walletSync: { synced: false, status: 404, error: "Wallet pass is not attached" },
       };
     }
 
     // Query business visual branding (colors, logo, template metadata, offer texts)
-    // First try direct table query; if blocked under anon RLS, fall back to get_public_business_by_slug RPC
+    // First try admin/direct table query; if blocked under anon RLS, fall back to get_public_business_by_slug RPC
     let biz: {
       slug?: string | null;
       name_ar?: string | null;
@@ -558,7 +606,7 @@ export const updateWalletPass = createServerFn({ method: "POST" })
     } | null = null;
 
     try {
-      const { data: bizRow } = await supabase
+      const { data: bizRow } = await dbClient
         .from("businesses")
         .select(
           "slug,name_ar,name_en,brand_color,accent_color,logo_url,offer_ar,offer_en,custom_domain,template_id,target_stamps",
@@ -666,6 +714,21 @@ export const updateWalletPass = createServerFn({ method: "POST" })
       }
     }
 
+    const emoji = iconToEmoji(icon);
+    let notificationText: string;
+    if (data.action === "redeem") {
+      notificationText = `🎁 Reward redeemed: ${passOffer}`;
+    } else if (data.action === "points") {
+      notificationText = `⭐ Points updated! Balance: ${state.pass_points} PTS`;
+    } else {
+      if (currentStamps >= targetStamps) {
+        notificationText = `🎉 Reward unlocked: ${passOffer} (${currentStamps}/${targetStamps})`;
+      } else {
+        const addedCount = Math.min(20, Math.max(1, data.count ?? 1));
+        notificationText = `${emoji} +${addedCount} stamp${addedCount > 1 ? "s" : ""} added! (${currentStamps}/${targetStamps})`;
+      }
+    }
+
     const passState: WalletPassState = {
       serial: state.pass_serial,
       businessName: passBusinessName,
@@ -684,12 +747,12 @@ export const updateWalletPass = createServerFn({ method: "POST" })
       colorPreset: effectiveColorPreset,
       stripStyle: templateMeta.stripStyle,
       tierMode: templateMeta.tierMode,
-      ...(data.action === "redeem" ? { notification: "Reward redeemed" } : {}),
+      notification: notificationText,
     };
 
     let result = await walletFetch(
       "PUT",
-      `/passes/${encodeURIComponent(state.wallet_serial)}`,
+      `/passes/${encodeURIComponent(walletSerial)}`,
       buildWalletPassPayload(passState),
     );
 
@@ -702,13 +765,21 @@ export const updateWalletPass = createServerFn({ method: "POST" })
     ) {
       result = await walletFetch(
         "PUT",
-        `/passes/${encodeURIComponent(state.wallet_serial)}`,
+        `/passes/${encodeURIComponent(walletSerial)}`,
         buildBaselineWalletPassPayload(passState),
       );
     }
+
+    const walletSync = {
+      synced: result.ok,
+      status: result.status,
+      ...(result.error ? { error: result.error } : {}),
+    };
+
     return {
       ok: result.ok,
       recorded: true as const,
+      sessionExpired: false as const,
       error: result.error,
       stamps: state.pass_stamps,
       points: state.pass_points,
@@ -718,6 +789,7 @@ export const updateWalletPass = createServerFn({ method: "POST" })
       templateMeta,
       businessOffer: passOffer,
       walletUpdated: result.ok,
+      walletSync,
     };
   });
 

@@ -132,6 +132,11 @@ export function buildBaselineWalletPassPayload(state: WalletPassState): Record<s
         label: "REWARD",
         value: state.offer || "Points Reward",
       },
+      {
+        key: "pass_code",
+        label: "PASS CODE",
+        value: state.serial,
+      },
     ];
   } else if (isCoupon) {
     headerFields = [
@@ -154,6 +159,11 @@ export function buildBaselineWalletPassPayload(state: WalletPassState): Record<s
         key: "details",
         label: "DETAILS",
         value: "Scan at counter to redeem & unlock stamp card",
+      },
+      {
+        key: "pass_code",
+        label: "PASS CODE",
+        value: state.serial,
       },
     ];
   } else {
@@ -197,16 +207,13 @@ export function buildBaselineWalletPassPayload(state: WalletPassState): Record<s
         label: "REWARD",
         value: state.offer || "Special Reward",
       },
+      {
+        key: "pass_code",
+        label: "PASS CODE",
+        value: state.serial,
+      },
     ];
   }
-
-  const auxiliaryFields = [
-    {
-      key: "pass_code",
-      label: "PASS CODE",
-      value: state.serial,
-    },
-  ];
 
   const backFields = [
     {
@@ -220,20 +227,24 @@ export function buildBaselineWalletPassPayload(state: WalletPassState): Record<s
     },
   ];
 
-  return {
+  const payload: Record<string, unknown> = {
     barcodeValue: state.serial,
     barcodeAltText: state.serial,
-    altText: state.serial,
     barcodeFormat: "QR",
     logoText,
     description: `Loyalty card for ${state.businessName}`,
     headerFields,
     primaryFields,
     secondaryFields,
-    auxiliaryFields,
     backFields,
     colorPreset,
   };
+
+  if (state.notification) {
+    payload["notification"] = state.notification;
+  }
+
+  return payload;
 }
 
 /**
@@ -269,18 +280,16 @@ export function buildWalletPassPayload(state: WalletPassState): Record<string, u
     },
   ];
 
-  const secondaryFields = state.offer
-    ? [
-        {
-          label: isCoupon ? "DETAILS" : "REWARD",
-          value: state.offer,
-        },
-      ]
-    : [];
-
-  const auxiliaryFields = [
+  const secondaryFields = [
+    ...(state.offer
+      ? [
+          {
+            label: isCoupon ? "DETAILS" : "REWARD",
+            value: state.offer,
+          },
+        ]
+      : []),
     {
-      key: "pass_code",
       label: "PASS CODE",
       value: state.serial,
     },
@@ -305,18 +314,20 @@ export function buildWalletPassPayload(state: WalletPassState): Record<string, u
   const payload: Record<string, unknown> = {
     barcodeValue: state.serial,
     barcodeAltText: state.serial,
-    altText: state.serial,
     barcodeFormat: "QR",
     logoText,
     description: `Loyalty card for ${state.businessName}`,
     headerFields,
-    auxiliaryFields,
     backFields,
     colorPreset: state.colorPreset || resolveColorPreset(state.brandColor, state.accentColor),
   };
 
   if (secondaryFields.length > 0) {
     payload["secondaryFields"] = secondaryFields;
+  }
+
+  if (state.notification) {
+    payload["notification"] = state.notification;
   }
 
   const effectiveStrip = state.stripUrl || state.stripDataUri;

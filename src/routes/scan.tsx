@@ -85,6 +85,11 @@ type ActivePassSheet = {
   totalStamps?: number | undefined;
   justUpdated?: boolean | undefined;
   walletSynced?: boolean | undefined;
+  walletSync?: {
+    synced: boolean;
+    status: number;
+    error?: string | undefined;
+  } | undefined;
   actionMessage?: string | undefined;
 };
 
@@ -256,6 +261,7 @@ export function CashierTerminal() {
   // Active Post-Scan Customer Pass Sheet
   const [activePass, setActivePass] = useState<ActivePassSheet | null>(null);
   const [actionInProgress, setActionInProgress] = useState(false);
+  const isStampingRef = useRef(false);
   const [amount, setAmount] = useState("");
 
   useEffect(() => {
@@ -678,6 +684,7 @@ export function CashierTerminal() {
   }
 
   async function handleApplyAction(action: "stamp" | "points" | "redeem", count = 1) {
+    if (isStampingRef.current || actionInProgress) return;
     if (!activePass || !business || !cashierSession) {
       toast.error(
         ar ? "انتهت جلسة الكاشير. افتح الشاشة مجدداً" : "Cashier session expired. Unlock again",
@@ -692,6 +699,7 @@ export function CashierTerminal() {
       return;
     }
 
+    isStampingRef.current = true;
     setActionInProgress(true);
     try {
       const res = await updateWalletPass({
@@ -710,77 +718,81 @@ export function CashierTerminal() {
         },
       });
 
-      if (res.sessionExpired) {
+      if (!res.recorded) {
+        if ("sessionExpired" in res && res.sessionExpired) {
+          playPOSChime("error");
+          toast.error(ar ? "انتهت جلسة الكاشير" : "Cashier session expired");
+          lockTerminal(false);
+          return;
+        }
         playPOSChime("error");
-        toast.error(ar ? "انتهت جلسة الكاشير" : "Cashier session expired");
-        lockTerminal(false);
+        toast.error(res.error || (ar ? "تعذر تسجيل العملية" : "Could not record action"));
         return;
       }
 
-      if (res.recorded) {
-        const nextStamps =
-          res.stamps ?? (action === "stamp" ? activePass.stamps + count : activePass.stamps);
-        const nextPoints = res.points ?? activePass.points;
-        const target = res.targetStamps ?? activePass.targetStamps;
+      const nextStamps =
+        res.stamps ?? (action === "stamp" ? activePass.stamps + count : activePass.stamps);
+      const nextPoints = res.points ?? activePass.points;
+      const target = res.targetStamps ?? activePass.targetStamps;
 
-        if (action === "redeem") {
-          playPOSChime("reward");
-          triggerHaptic("reward");
-        } else {
-          playPOSChime("stamp");
-          triggerHaptic("stamp");
-        }
-
-        let confirmMsg = "";
-        if (action === "stamp") {
-          confirmMsg = ar
-            ? `✓ تمت إضافة ${count > 1 ? count + " أختام" : "ختم"}! تم تحديث رصيد Apple Wallet إلى ${nextStamps}/${target}`
-            : `✓ +${count} Stamp${count > 1 ? "s" : ""} Added! Apple Wallet pass updated to ${nextStamps}/${target}`;
-        } else if (action === "redeem") {
-          confirmMsg = ar
-            ? "🎉 تم استلام المكافأة بنجاح! تم تجديد البطاقة للدورة القادمة."
-            : "🎉 Reward Redeemed! Card reset for next cycle.";
-        } else {
-          confirmMsg = ar
-            ? `✓ تم تسجيل المبلغ! رصيد النقاط: ${nextPoints}`
-            : `✓ SAR spend logged! Points balance: ${nextPoints} pts`;
-        }
-
-        // Warn when a recorded action fails wallet sync (tested in check-wallet-payload.mjs)
-        if (!res.ok) {
-          toast.warning(
-            ar
-              ? "تم تسجيل العملية، لكن مزامنة المحفظة غير متاحة"
-              : "Action recorded, but wallet sync is unavailable",
-          );
-        }
-
-        setActivePass((prev) =>
-          prev
-            ? {
-                ...prev,
-                stamps: nextStamps,
-                points: nextPoints,
-                morphed: res.morphed ?? prev.morphed,
-                targetStamps: target,
-                justUpdated: true,
-                walletSynced: res.walletUpdated ?? res.ok,
-                actionMessage: confirmMsg,
-              }
-            : null,
-        );
-
-        saveRecentPass(business.business_slug, activePass.serial, activePass.phone, nextStamps);
-        toast.success(confirmMsg);
+      if (action === "redeem") {
+        playPOSChime("reward");
+        triggerHaptic("reward");
       } else {
-        playPOSChime("error");
-        toast.error(res.error || (ar ? "تعذر تسجيل العملية" : "Could not record action"));
+        playPOSChime("stamp");
+        triggerHaptic("stamp");
       }
+
+      let confirmMsg = "";
+      if (action === "stamp") {
+        confirmMsg = ar
+          ? `✓ تمت إضافة ${count > 1 ? count + " أختام" : "ختم"}! تم تحديث رصيد Apple Wallet إلى ${nextStamps}/${target}`
+          : `✓ +${count} Stamp${count > 1 ? "s" : ""} Added! Apple Wallet pass updated to ${nextStamps}/${target}`;
+      } else if (action === "redeem") {
+        confirmMsg = ar
+          ? "🎉 تم استلام المكافأة بنجاح! تم تجديد البطاقة للدورة القادمة."
+          : "🎉 Reward Redeemed! Card reset for next cycle.";
+      } else {
+        confirmMsg = ar
+          ? `✓ تم تسجيل المبلغ! رصيد النقاط: ${nextPoints}`
+          : `✓ SAR spend logged! Points balance: ${nextPoints} pts`;
+      }
+
+      // Warn when a recorded action fails wallet sync (tested in check-wallet-payload.mjs)
+      if (!res.ok) {
+        toast.warning(
+          ar
+            ? "تم تسجيل العملية، لكن مزامنة المحفظة غير متاحة"
+            : "Action recorded, but wallet sync is unavailable",
+        );
+      }
+
+      const syncStatus = res.walletSync;
+
+      setActivePass((prev) =>
+        prev
+          ? {
+              ...prev,
+              stamps: nextStamps,
+              points: nextPoints,
+              morphed: res.morphed ?? prev.morphed,
+              targetStamps: target,
+              justUpdated: true,
+              walletSynced: syncStatus.synced,
+              walletSync: syncStatus,
+              actionMessage: confirmMsg,
+            }
+          : null,
+      );
+
+      saveRecentPass(business.business_slug, activePass.serial, activePass.phone, nextStamps);
+      toast.success(confirmMsg);
     } catch (err: unknown) {
       playPOSChime("error");
       const msg = err instanceof Error ? err.message : ar ? "خطأ في الاتصال" : "Network error";
       toast.error(msg);
     } finally {
+      isStampingRef.current = false;
       setActionInProgress(false);
       if (action === "points") setAmount("");
     }
@@ -1176,13 +1188,23 @@ export function CashierTerminal() {
                 <div className="text-end">
                   <span
                     className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md ${
-                      activePass.walletSynced !== false
-                        ? "text-emerald-400 bg-emerald-500/10 border border-emerald-500/20"
-                        : "text-zinc-400 bg-zinc-800"
+                      activePass.walletSync
+                        ? activePass.walletSync.synced
+                          ? "text-emerald-400 bg-emerald-500/10 border border-emerald-500/20"
+                          : "text-amber-400 bg-amber-500/10 border border-amber-500/20"
+                        : activePass.walletSynced !== false
+                          ? "text-emerald-400 bg-emerald-500/10 border border-emerald-500/20"
+                          : "text-zinc-400 bg-zinc-800"
                     }`}
                   >
                     <Zap className="size-3" />
-                    <span>{ar ? "Apple Wallet OTA" : "Apple Wallet OTA"}</span>
+                    <span>
+                      {activePass.walletSync
+                        ? activePass.walletSync.synced
+                          ? "Apple Wallet (Live)"
+                          : `Sync Pending (${activePass.walletSync.status || activePass.walletSync.error})`
+                        : "Apple Wallet OTA"}
+                    </span>
                   </span>
                 </div>
               </div>
@@ -1200,8 +1222,26 @@ export function CashierTerminal() {
 
             {/* Action Confirmation Banner */}
             {activePass.actionMessage && (
-              <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-center text-xs text-emerald-300 font-medium animate-in fade-in duration-200">
-                {activePass.actionMessage}
+              <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-center space-y-1.5 animate-in fade-in duration-200">
+                <div className="text-xs text-emerald-300 font-medium">{activePass.actionMessage}</div>
+                {activePass.walletSync && (
+                  <div className="text-[11px] font-mono flex items-center justify-center gap-1.5 pt-1 border-t border-emerald-500/20">
+                    {activePass.walletSync.synced ? (
+                      <span className="text-emerald-400 font-semibold inline-flex items-center gap-1">
+                        <span>🟢</span>
+                        <span>Synced to Apple Wallet (Live)</span>
+                      </span>
+                    ) : (
+                      <span className="text-amber-400 font-semibold inline-flex items-center gap-1">
+                        <span>🟡</span>
+                        <span>
+                          Saved to DB — Wallet Sync Pending (
+                          {activePass.walletSync.status || activePass.walletSync.error})
+                        </span>
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
