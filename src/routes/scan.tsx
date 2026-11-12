@@ -25,11 +25,17 @@ import {
 import { useLocale } from "@/lib/i18n";
 import { supabase } from "@/lib/supabase";
 import {
+  getPublicBusinessBySlug,
   lookupCustomerPass,
   updateWalletPass,
   unlockCashierTerminal,
 } from "@/lib/wallet.functions";
-import { iconToEmoji, parsePassTemplateMeta, type PassTemplateMeta } from "@/lib/wallet-tier";
+import {
+  iconToEmoji,
+  parsePassTemplateMeta,
+  resolveRestaurantBranding,
+  type PassTemplateMeta,
+} from "@/lib/wallet-tier";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -309,6 +315,21 @@ export function CashierTerminal() {
 
   async function loadBusinessBranding(bSlug: string) {
     try {
+      const serverRes = await getPublicBusinessBySlug({ data: { slug: bSlug } });
+      if (serverRes.ok && serverRes.business) {
+        return {
+          template_id: serverRes.business.template_id ?? null,
+          brand_color: serverRes.business.brand_color ?? null,
+          accent_color: serverRes.business.accent_color ?? null,
+          offer_ar: serverRes.business.offer_ar ?? null,
+          offer_en: serverRes.business.offer_en ?? null,
+          target_stamps: serverRes.business.target_stamps ?? 8,
+        };
+      }
+    } catch {
+      // Server function fallback to RPC below
+    }
+    try {
       const { data: bData } = await supabase
         .rpc("get_public_business_by_slug", { _slug: bSlug })
         .maybeSingle();
@@ -320,6 +341,7 @@ export function CashierTerminal() {
           accent_color: (row["accent_color"] as string) ?? null,
           offer_ar: (row["offer_ar"] as string) ?? null,
           offer_en: (row["offer_en"] as string) ?? null,
+          target_stamps: Number(row["target_stamps"] ?? row["stamps_required"] ?? 8),
         };
       }
     } catch {
@@ -452,8 +474,23 @@ export function CashierTerminal() {
 
       // Query template metadata and branding for live terminal display
       const branding = await loadBusinessBranding(cleanSlug);
-      const parsedMeta = parsePassTemplateMeta(branding?.template_id);
-      setTemplateMeta(parsedMeta);
+      const parsedMeta = parsePassTemplateMeta(branding?.template_id, branding?.brand_color);
+      const resolvedBranding = resolveRestaurantBranding({
+        brandColor: branding?.brand_color,
+        accentColor: branding?.accent_color,
+        templateId: branding?.template_id,
+        offerEn: branding?.offer_en,
+        offerAr: branding?.offer_ar,
+        nameEn: res.name_en,
+        nameAr: res.name_ar,
+      });
+      setTemplateMeta({
+        ...parsedMeta,
+        stampIcon: resolvedBranding.stampIcon,
+        colorPreset: resolvedBranding.colorPreset,
+        tierMode: resolvedBranding.tierMode,
+        stripStyle: resolvedBranding.stripStyle,
+      });
 
       setBusiness({
         business_id: res.business_id,
@@ -466,11 +503,11 @@ export function CashierTerminal() {
         staff_name_en: res.staff_name_en || cleanName,
         cashier_name: cleanName,
         template_id: branding?.template_id ?? null,
-        brand_color: branding?.brand_color ?? null,
-        accent_color: branding?.accent_color ?? null,
+        brand_color: resolvedBranding.brandHex,
+        accent_color: resolvedBranding.accentHex,
         offer_ar: branding?.offer_ar ?? null,
         offer_en: branding?.offer_en ?? null,
-        target_stamps: 8,
+        target_stamps: branding?.target_stamps ?? 8,
       });
 
       setCashierSession(res.cashier_session);

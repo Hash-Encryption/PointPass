@@ -7,19 +7,10 @@ import { createServerSupabaseClient, createAdminSupabaseClient } from "@/lib/ser
 import {
   buildBaselineWalletPassPayload,
   buildWalletPassPayload,
-  resolveColorPreset,
   type WalletPassState,
 } from "@/lib/wallet-payload";
-import {
-  parsePassTemplateMeta,
-  iconToEmoji,
-  WALLET_COLOR_PRESETS,
-  resolveRestaurantBranding,
-  type StripStyle,
-  type WalletColorPreset,
-  type WalletTierMode,
-} from "@/lib/wallet-tier";
-import { generateStampStripDataUri, resolveStampIcon } from "@/lib/strip-generator";
+import { iconToEmoji, parsePassTemplateMeta, resolveRestaurantBranding } from "@/lib/wallet-tier";
+import { generateStampStripDataUri } from "@/lib/strip-generator";
 import { captureAppError } from "@/lib/observability";
 
 // Caller-scoped throttle for anonymous guest claims (prevents bot floods while protecting legitimate users)
@@ -222,6 +213,87 @@ const publicBusinessSchema = z.object({
   slug: z.string().min(1).max(64),
 });
 
+const BUSINESS_BRANDING_COLUMNS =
+  "id,slug,name_ar,name_en,logo_url,brand_color,accent_color,program_type,offer_ar,offer_en,target_stamps,sar_per_point,points_per_reward,custom_domain,template_id,status";
+
+type BusinessBrandingRow = {
+  id?: string | null;
+  slug?: string | null;
+  name_ar?: string | null;
+  name_en?: string | null;
+  logo_url?: string | null;
+  brand_color?: string | null;
+  accent_color?: string | null;
+  program_type?: string | null;
+  offer_ar?: string | null;
+  offer_en?: string | null;
+  target_stamps?: number | null;
+  stamps_required?: number | null;
+  sar_per_point?: number | null;
+  points_per_reward?: number | null;
+  custom_domain?: string | null;
+  template_id?: string | null;
+  status?: string | null;
+};
+
+/**
+ * Fetches full restaurant branding directly via service-role admin client first so RLS
+ * never hides template_id or brand_color, falling back to get_public_business_by_slug RPC.
+ */
+async function fetchBusinessRowBySlug(
+  db: ReturnType<typeof createServerSupabaseClient>,
+  anonClient: ReturnType<typeof createServerSupabaseClient>,
+  slug: string,
+): Promise<BusinessBrandingRow | null> {
+  const cleanSlug = slug.toLowerCase().trim();
+  let biz: BusinessBrandingRow | null = null;
+
+  try {
+    const { data: row } = await db
+      .from("businesses")
+      .select(BUSINESS_BRANDING_COLUMNS)
+      .eq("slug", cleanSlug)
+      .maybeSingle();
+    if (row) {
+      biz = row as BusinessBrandingRow;
+    }
+  } catch {
+    // Fall back to SECURITY DEFINER RPC below
+  }
+
+  if (!biz || !biz.template_id || !biz.brand_color) {
+    try {
+      const { data: rpcRow } = await anonClient
+        .rpc("get_public_business_by_slug", { _slug: cleanSlug })
+        .maybeSingle();
+      if (rpcRow) {
+        const r = rpcRow as BusinessBrandingRow;
+        biz = {
+          ...biz,
+          id: r.id ?? biz?.id ?? null,
+          slug: r.slug ?? biz?.slug ?? cleanSlug,
+          name_ar: r.name_ar ?? biz?.name_ar ?? null,
+          name_en: r.name_en ?? biz?.name_en ?? null,
+          logo_url: r.logo_url ?? biz?.logo_url ?? null,
+          brand_color: r.brand_color ?? biz?.brand_color ?? null,
+          accent_color: r.accent_color ?? biz?.accent_color ?? null,
+          program_type: r.program_type ?? biz?.program_type ?? null,
+          offer_ar: r.offer_ar ?? biz?.offer_ar ?? null,
+          offer_en: r.offer_en ?? biz?.offer_en ?? null,
+          target_stamps: r.target_stamps ?? r.stamps_required ?? biz?.target_stamps ?? null,
+          sar_per_point: r.sar_per_point ?? biz?.sar_per_point ?? null,
+          points_per_reward: r.points_per_reward ?? biz?.points_per_reward ?? null,
+          template_id: r.template_id ?? biz?.template_id ?? null,
+        };
+      }
+    } catch {
+      // RPC fallback
+    }
+  }
+
+  return biz;
+}
+
 export const getPublicBusinessBySlug = createServerFn({ method: "GET" })
   .validator((d: unknown) => publicBusinessSchema.parse(d))
   .handler(async ({ data }) => {
@@ -230,34 +302,7 @@ export const getPublicBusinessBySlug = createServerFn({ method: "GET" })
     const db = admin ?? supabase;
     const cleanSlug = data.slug.toLowerCase().trim();
 
-    let biz: Record<string, unknown> | null = null;
-    try {
-      const { data: row } = await db
-        .from("businesses")
-        .select(
-          "id,slug,name_ar,name_en,logo_url,brand_color,accent_color,program_type,offer_ar,offer_en,target_stamps,template_id,status",
-        )
-        .eq("slug", cleanSlug)
-        .maybeSingle();
-      if (row) {
-        biz = row;
-      }
-    } catch {
-      // Direct query fallback
-    }
-
-    if (!biz) {
-      try {
-        const { data: rpcRow } = await supabase
-          .rpc("get_public_business_by_slug", { _slug: cleanSlug })
-          .maybeSingle();
-        if (rpcRow) {
-          biz = rpcRow as Record<string, unknown>;
-        }
-      } catch {
-        // RPC fallback
-      }
-    }
+    const biz = await fetchBusinessRowBySlug(db, supabase, cleanSlug);
 
     if (!biz) {
       return {
@@ -267,16 +312,17 @@ export const getPublicBusinessBySlug = createServerFn({ method: "GET" })
       };
     }
 
-    const rawTemplateId = (biz["template_id"] as string) ?? null;
-    const targetStamps = Number(biz["target_stamps"] || 8);
-    const offerAr = (biz["offer_ar"] as string) || "";
-    const offerEn = (biz["offer_en"] as string) || "";
-    const nameAr = (biz["name_ar"] as string) || "";
-    const nameEn = (biz["name_en"] as string) || "";
+    const rawTemplateId =
+      biz.template_id ?? (biz.custom_domain?.startsWith("tpl_") ? biz.custom_domain : null);
+    const targetStamps = Number(biz.target_stamps || biz.stamps_required || 8);
+    const offerAr = biz.offer_ar || "";
+    const offerEn = biz.offer_en || "";
+    const nameAr = biz.name_ar || "";
+    const nameEn = biz.name_en || "";
 
     const branding = resolveRestaurantBranding({
-      brandColor: (biz["brand_color"] as string) ?? null,
-      accentColor: (biz["accent_color"] as string) ?? null,
+      brandColor: biz.brand_color ?? null,
+      accentColor: biz.accent_color ?? null,
       templateId: rawTemplateId,
       offerEn,
       offerAr,
@@ -288,20 +334,20 @@ export const getPublicBusinessBySlug = createServerFn({ method: "GET" })
       ok: true as const,
       error: null,
       business: {
-        id: (biz["id"] as string) || "",
+        id: biz.id || "",
         name: nameAr || nameEn || cleanSlug,
         name_ar: nameAr,
         name_en: nameEn,
-        slug: (biz["slug"] as string) || cleanSlug,
+        slug: biz.slug || cleanSlug,
         offer_ar: offerAr,
         offer_en: offerEn,
         target_stamps: targetStamps,
         stamps_required: targetStamps,
         brand_color: branding.brandHex,
         accent_color: branding.accentHex,
-        logo_url: (biz["logo_url"] as string) || null,
+        logo_url: biz.logo_url || null,
         template_id: rawTemplateId,
-        program_type: (biz["program_type"] as string) || "stamp",
+        program_type: biz.program_type || "stamp",
         templateMeta: {
           baseId: rawTemplateId || "blank",
           stampIcon: branding.stampIcon,
@@ -418,7 +464,9 @@ const createPassSchema = z.object({
 export const createWalletPass = createServerFn({ method: "POST" })
   .validator((d: unknown) => createPassSchema.parse(d))
   .handler(async ({ data }) => {
+    const admin = createAdminSupabaseClient();
     const supabase = createServerSupabaseClient();
+    const db = admin ?? supabase;
     const cleanPhone = normalizePhoneNumber(data.phone);
 
     // Caller-scoped rate limit for anonymous claims (where phone is null)
@@ -430,7 +478,7 @@ export const createWalletPass = createServerFn({ method: "POST" })
       throw new Error("Too many guest pass requests from this device. Please wait a moment.");
     }
 
-    const { data: claimData, error: claimError } = await supabase
+    const { data: claimData, error: claimError } = await db
       .rpc("claim_public_pass", {
         _slug: data.slug,
         _phone: cleanPhone,
@@ -481,59 +529,10 @@ export const createWalletPass = createServerFn({ method: "POST" })
       }
     }
 
-    // Query business visual branding (colors, logo, template metadata, offer texts)
-    // First try direct table query; if blocked under anon RLS, fall back to get_public_business_by_slug RPC
-    let biz: {
-      name_ar?: string | null;
-      name_en?: string | null;
-      brand_color?: string | null;
-      accent_color?: string | null;
-      logo_url?: string | null;
-      offer_ar?: string | null;
-      offer_en?: string | null;
-      custom_domain?: string | null;
-      template_id?: string | null;
-    } | null = null;
+    // Query business visual branding directly via admin client first so RLS never hides template_id/brand_color
+    const biz = await fetchBusinessRowBySlug(db, supabase, data.slug);
 
-    try {
-      const { data: bizRow } = await supabase
-        .from("businesses")
-        .select(
-          "name_ar,name_en,brand_color,accent_color,logo_url,offer_ar,offer_en,custom_domain,template_id",
-        )
-        .eq("slug", data.slug)
-        .maybeSingle();
-      if (bizRow) {
-        biz = bizRow;
-      }
-    } catch {
-      // Direct select may be blocked by anon RLS
-    }
-
-    if (!biz || !biz.brand_color) {
-      try {
-        const { data: rpcBiz } = await supabase
-          .rpc("get_public_business_by_slug", { _slug: data.slug })
-          .maybeSingle();
-        if (rpcBiz) {
-          const row = rpcBiz as Record<string, unknown>;
-          biz = {
-            name_ar: (row["name_ar"] as string) ?? null,
-            name_en: (row["name_en"] as string) ?? null,
-            brand_color: (row["brand_color"] as string) ?? null,
-            accent_color: (row["accent_color"] as string) ?? null,
-            logo_url: (row["logo_url"] as string) ?? null,
-            offer_ar: (row["offer_ar"] as string) ?? null,
-            offer_en: (row["offer_en"] as string) ?? null,
-            template_id: (row["template_id"] as string) ?? null,
-          };
-        }
-      } catch {
-        // Fallback
-      }
-    }
-
-    // Blend server & client-passed branding attributes (protecting anon callers from RLS nulls)
+    // Blend server & client-passed branding attributes (DB row always wins)
     const effectiveBrandColor = biz?.brand_color || data.brandColor || null;
     const effectiveAccentColor = biz?.accent_color || data.accentColor || null;
     const rawTemplateId: string | null =
@@ -559,7 +558,7 @@ export const createWalletPass = createServerFn({ method: "POST" })
       nameAr: biz?.name_ar,
     });
 
-    const targetStamps = claim.business_target_stamps || 8;
+    const targetStamps = Number(biz?.target_stamps || claim.business_target_stamps || 8);
     const isStampCard =
       claim.pass_program_type === "stamp" || claim.pass_program_type === "coupon_morph";
     let currentStamps = claim.pass_stamps ?? 0;
@@ -568,11 +567,9 @@ export const createWalletPass = createServerFn({ method: "POST" })
     if (isStampCard && currentStamps === 0) {
       currentStamps = 1;
       try {
-        await supabase.rpc("grant_welcome_stamp", { _pass_serial: effectiveSerial });
+        await db.rpc("grant_welcome_stamp", { _pass_serial: effectiveSerial });
       } catch (rpcErr) {
         try {
-          const admin = createAdminSupabaseClient();
-          const db = admin ?? supabase;
           await db.from("pass_instances").update({ stamps: 1 }).eq("serial", effectiveSerial);
         } catch (directErr) {
           console.warn("Welcome stamp initialization note:", directErr ?? rpcErr);
@@ -728,14 +725,12 @@ export const createWalletPass = createServerFn({ method: "POST" })
     } | null;
 
     if (!claim.pass_wallet_serial && payload?.serialNumber) {
-      const { error: attachError } = await supabase.rpc("attach_wallet_serial", {
+      const { error: attachError } = await db.rpc("attach_wallet_serial", {
         _pass_serial: effectiveSerial,
         _wallet_serial: payload.serialNumber,
       });
       if (attachError) {
         try {
-          const admin = createAdminSupabaseClient();
-          const db = admin ?? supabase;
           await db
             .from("pass_instances")
             .update({ wallet_serial: payload.serialNumber })
@@ -892,63 +887,10 @@ export const updateWalletPass = createServerFn({ method: "POST" })
       };
     }
 
-    // Query business visual branding (colors, logo, template metadata, offer texts)
-    // First try admin/direct table query; if blocked under anon RLS, fall back to get_public_business_by_slug RPC
-    let biz: {
-      slug?: string | null;
-      name_ar?: string | null;
-      name_en?: string | null;
-      brand_color?: string | null;
-      accent_color?: string | null;
-      logo_url?: string | null;
-      offer_ar?: string | null;
-      offer_en?: string | null;
-      custom_domain?: string | null;
-      template_id?: string | null;
-      target_stamps?: number | null;
-    } | null = null;
+    // Query business visual branding directly via admin client first so RLS never hides template_id/brand_color
+    const biz = await fetchBusinessRowBySlug(dbClient, supabase, data.slug);
 
-    try {
-      const { data: bizRow } = await dbClient
-        .from("businesses")
-        .select(
-          "slug,name_ar,name_en,brand_color,accent_color,logo_url,offer_ar,offer_en,custom_domain,template_id,target_stamps",
-        )
-        .eq("slug", data.slug)
-        .maybeSingle();
-      if (bizRow) {
-        biz = bizRow;
-      }
-    } catch {
-      // Direct select may be blocked by anon RLS
-    }
-
-    if (!biz || !biz.template_id || !biz.brand_color) {
-      try {
-        const { data: rpcBiz } = await supabase
-          .rpc("get_public_business_by_slug", { _slug: data.slug })
-          .maybeSingle();
-        if (rpcBiz) {
-          const row = rpcBiz as Record<string, unknown>;
-          biz = {
-            ...biz,
-            slug: (row["slug"] as string) ?? biz?.slug ?? data.slug,
-            name_ar: (row["name_ar"] as string) ?? biz?.name_ar ?? null,
-            name_en: (row["name_en"] as string) ?? biz?.name_en ?? null,
-            brand_color: (row["brand_color"] as string) ?? biz?.brand_color ?? null,
-            accent_color: (row["accent_color"] as string) ?? biz?.accent_color ?? null,
-            logo_url: (row["logo_url"] as string) ?? biz?.logo_url ?? null,
-            offer_ar: (row["offer_ar"] as string) ?? biz?.offer_ar ?? null,
-            offer_en: (row["offer_en"] as string) ?? biz?.offer_en ?? null,
-            template_id: (row["template_id"] as string) ?? biz?.template_id ?? null,
-          };
-        }
-      } catch {
-        // Fallback
-      }
-    }
-
-    // Blend server & client-forwarded branding attributes (cashier session fallback)
+    // Blend server & client-forwarded branding attributes (DB row always wins)
     const effectiveBrandColor = biz?.brand_color || data.brandColor || null;
     const effectiveAccentColor = biz?.accent_color || data.accentColor || null;
     const rawTemplateId: string | null =
@@ -956,8 +898,7 @@ export const updateWalletPass = createServerFn({ method: "POST" })
       data.templateId ||
       (biz?.custom_domain?.startsWith("tpl_") ? biz.custom_domain : null);
 
-    const templateMeta = parsePassTemplateMeta(rawTemplateId);
-    const targetStamps = state.business_target_stamps || biz?.target_stamps || 8;
+    const targetStamps = Number(biz?.target_stamps || state.business_target_stamps || 8);
     const currentStamps = state.pass_stamps ?? 0;
     const isStampCard =
       state.pass_program_type === "stamp" || state.pass_program_type === "coupon_morph";
@@ -968,37 +909,46 @@ export const updateWalletPass = createServerFn({ method: "POST" })
     const passOffer =
       biz?.offer_ar || biz?.offer_en || data.offerText || state.business_offer || "Special Reward";
 
-    const icon =
-      templateMeta.stampIcon !== "star"
-        ? templateMeta.stampIcon
-        : resolveStampIcon(null, passOffer, effectiveBrandColor);
-
-    const effectiveColorPreset =
-      rawTemplateId && rawTemplateId.includes("preset-")
-        ? templateMeta.colorPreset
-        : resolveColorPreset(effectiveBrandColor, effectiveAccentColor);
+    const parsedMeta = parsePassTemplateMeta(rawTemplateId, effectiveBrandColor);
+    const branding = resolveRestaurantBranding({
+      brandColor: effectiveBrandColor,
+      accentColor: effectiveAccentColor,
+      templateId: rawTemplateId,
+      offerEn: biz?.offer_en || passOffer,
+      offerAr: biz?.offer_ar,
+      nameEn: biz?.name_en || state.business_name,
+      nameAr: biz?.name_ar,
+    });
+    const templateMeta = {
+      ...parsedMeta,
+      stampIcon: branding.stampIcon,
+      colorPreset: branding.colorPreset,
+      stripStyle: branding.stripStyle,
+      tierMode: branding.tierMode,
+    };
+    const icon = branding.stampIcon;
 
     let stripDataUri: string | undefined;
     let stripUrl: string | undefined;
-    if (isStampCard && templateMeta.tierMode === "pro") {
+    if (isStampCard && branding.tierMode === "pro") {
       try {
         stripUrl = getPublicStripUrl(
           data.slug,
           currentStamps,
           targetStamps,
-          effectiveBrandColor,
-          effectiveAccentColor,
+          branding.brandHex,
+          branding.accentHex,
           icon,
-          templateMeta.stripStyle,
+          branding.stripStyle,
         );
         if (!stripUrl) {
           stripDataUri = generateStampStripDataUri({
             targetStamps,
             stamps: currentStamps,
-            brandColor: effectiveBrandColor,
-            accentColor: effectiveAccentColor,
+            brandColor: branding.brandHex,
+            accentColor: branding.accentHex,
             stampIcon: icon,
-            stripStyle: templateMeta.stripStyle,
+            stripStyle: branding.stripStyle,
           });
         }
       } catch (stripErr) {
@@ -1009,7 +959,7 @@ export const updateWalletPass = createServerFn({ method: "POST" })
       }
     }
 
-    const emoji = iconToEmoji(icon);
+    const emoji = branding.stampEmoji;
     let notificationText: string;
     if (data.action === "redeem") {
       notificationText = `🎁 Reward redeemed: ${passOffer}`;
@@ -1033,15 +983,15 @@ export const updateWalletPass = createServerFn({ method: "POST" })
       points: state.pass_points,
       morphed: state.pass_morphed,
       targetStamps,
-      brandColor: effectiveBrandColor,
-      accentColor: effectiveAccentColor,
+      brandColor: branding.brandHex,
+      accentColor: branding.accentHex,
       stripUrl,
       stripDataUri,
       logoUrl: biz?.logo_url,
       stampIcon: icon,
-      colorPreset: effectiveColorPreset,
-      stripStyle: templateMeta.stripStyle,
-      tierMode: templateMeta.tierMode,
+      colorPreset: branding.colorPreset,
+      stripStyle: branding.stripStyle,
+      tierMode: branding.tierMode,
       notification: notificationText,
     };
 
@@ -1460,7 +1410,7 @@ export const sendWalletPush = createServerFn({ method: "POST" })
     const { data: business, error: businessError } = await supabase
       .from("businesses")
       .select(
-        "id,name_en,offer_en,target_stamps,brand_color,accent_color,logo_url,offer_ar,custom_domain",
+        "id,name_ar,name_en,offer_en,target_stamps,brand_color,accent_color,logo_url,offer_ar,custom_domain,template_id",
       )
       .eq("id", data.businessId)
       .eq("slug", data.slug)
@@ -1470,25 +1420,19 @@ export const sendWalletPush = createServerFn({ method: "POST" })
       throw new Error("You cannot send campaigns for this business");
     }
 
-    let rawTemplateId: string | null = null;
-    try {
-      const { data: tplRow } = await supabase
-        .from("businesses")
-        .select("template_id")
-        .eq("id", data.businessId)
-        .maybeSingle();
-      if (tplRow && (tplRow as { template_id?: string | null }).template_id) {
-        rawTemplateId = (tplRow as { template_id?: string | null }).template_id!;
-      }
-    } catch {
-      // Table column may not exist yet
-    }
+    const rawTemplateId: string | null =
+      business.template_id ??
+      (business.custom_domain?.startsWith("tpl_") ? business.custom_domain : null);
 
-    if (!rawTemplateId && business?.custom_domain?.startsWith("tpl_")) {
-      rawTemplateId = business.custom_domain;
-    }
-
-    const templateMeta = parsePassTemplateMeta(rawTemplateId);
+    const branding = resolveRestaurantBranding({
+      brandColor: business.brand_color,
+      accentColor: business.accent_color,
+      templateId: rawTemplateId,
+      offerEn: business.offer_en,
+      offerAr: business.offer_ar,
+      nameEn: business.name_en,
+      nameAr: business.name_ar,
+    });
 
     let passesQuery = supabase
       .from("pass_instances")
@@ -1510,36 +1454,32 @@ export const sendWalletPush = createServerFn({ method: "POST" })
 
     const notification = [data.titleEn.trim(), data.bodyEn.trim()].filter(Boolean).join(" — ");
     const targetStamps = business.target_stamps ?? 9;
-
-    const icon =
-      templateMeta.stampIcon !== "star"
-        ? templateMeta.stampIcon
-        : resolveStampIcon(null, business.offer_ar || business.offer_en, business.brand_color);
+    const icon = branding.stampIcon;
 
     const results = await Promise.all(
       passes.map(async (pass) => {
         const isStampCard = pass.program_type === "stamp" || pass.program_type === "coupon_morph";
         let stripDataUri: string | undefined;
         let stripUrl: string | undefined;
-        if (isStampCard && templateMeta.tierMode === "pro") {
+        if (isStampCard && branding.tierMode === "pro") {
           try {
             stripUrl = getPublicStripUrl(
               data.slug,
               pass.stamps,
               targetStamps,
-              business.brand_color,
-              business.accent_color,
+              branding.brandHex,
+              branding.accentHex,
               icon,
-              templateMeta.stripStyle,
+              branding.stripStyle,
             );
             if (!stripUrl) {
               stripDataUri = generateStampStripDataUri({
                 targetStamps,
                 stamps: pass.stamps,
-                brandColor: business.brand_color,
-                accentColor: business.accent_color,
+                brandColor: branding.brandHex,
+                accentColor: branding.accentHex,
                 stampIcon: icon,
-                stripStyle: templateMeta.stripStyle,
+                stripStyle: branding.stripStyle,
               });
             }
           } catch {
@@ -1557,15 +1497,15 @@ export const sendWalletPush = createServerFn({ method: "POST" })
           morphed: pass.morphed,
           targetStamps,
           notification,
-          brandColor: business.brand_color,
-          accentColor: business.accent_color,
+          brandColor: branding.brandHex,
+          accentColor: branding.accentHex,
           stripUrl,
           stripDataUri,
           logoUrl: business.logo_url,
           stampIcon: icon,
-          colorPreset: templateMeta.colorPreset,
-          stripStyle: templateMeta.stripStyle,
-          tierMode: templateMeta.tierMode,
+          colorPreset: branding.colorPreset,
+          stripStyle: branding.stripStyle,
+          tierMode: branding.tierMode,
         };
 
         const res = await walletFetch(

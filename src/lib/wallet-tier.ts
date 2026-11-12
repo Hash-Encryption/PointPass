@@ -10,17 +10,95 @@ export interface PassTemplateMeta {
   tierMode: WalletTierMode;
 }
 
+export const FREE_TIER_PRESETS: Record<WalletColorPreset, string> = {
+  orange: "#e65100",
+  red: "#dc2626",
+  blue: "#2563eb",
+  purple: "#7c3aed",
+  dark: "#18181b",
+  green: "#059669",
+};
+
 export const WALLET_COLOR_PRESETS: Record<
   WalletColorPreset,
   { nameAr: string; nameEn: string; hex: string; accent: string }
 > = {
-  dark: { nameAr: "أسود داكن", nameEn: "Dark Obsidian", hex: "#121214", accent: "#10B981" },
-  red: { nameAr: "أحمر قرمزي", nameEn: "Crimson Red", hex: "#991B1B", accent: "#F87171" },
-  orange: { nameAr: "برتقالي دافئ", nameEn: "Warm Orange", hex: "#C2410C", accent: "#FBBF24" },
-  green: { nameAr: "أخضر زمردي", nameEn: "Emerald Green", hex: "#065F46", accent: "#34D399" },
-  purple: { nameAr: "بنفسجي ملكي", nameEn: "Royal Purple", hex: "#581C87", accent: "#C084FC" },
-  blue: { nameAr: "أزرق محيطي", nameEn: "Ocean Blue", hex: "#1E40AF", accent: "#60A5FA" },
+  orange: {
+    nameAr: "برتقالي دافئ",
+    nameEn: "Warm Orange",
+    hex: FREE_TIER_PRESETS.orange,
+    accent: "#fbbf24",
+  },
+  red: {
+    nameAr: "أحمر قرمزي",
+    nameEn: "Crimson Red",
+    hex: FREE_TIER_PRESETS.red,
+    accent: "#f87171",
+  },
+  blue: {
+    nameAr: "أزرق محيطي",
+    nameEn: "Ocean Blue",
+    hex: FREE_TIER_PRESETS.blue,
+    accent: "#60a5fa",
+  },
+  purple: {
+    nameAr: "بنفسجي ملكي",
+    nameEn: "Royal Purple",
+    hex: FREE_TIER_PRESETS.purple,
+    accent: "#c084fc",
+  },
+  dark: {
+    nameAr: "أسود داكن",
+    nameEn: "Dark Obsidian",
+    hex: FREE_TIER_PRESETS.dark,
+    accent: "#fbbf24",
+  },
+  green: {
+    nameAr: "أخضر زمردي",
+    nameEn: "Emerald Green",
+    hex: FREE_TIER_PRESETS.green,
+    accent: "#34d399",
+  },
 };
+
+function parseHexRgb(hex?: string | null): [number, number, number] | null {
+  if (!hex) return null;
+  let clean = hex.trim().replace(/^#/, "");
+  if (/^[0-9a-fA-F]{3}$/.test(clean)) {
+    clean = clean
+      .split("")
+      .map((c) => c + c)
+      .join("");
+  }
+  if (!/^[0-9a-fA-F]{6}$/.test(clean)) return null;
+  return [
+    parseInt(clean.slice(0, 2), 16),
+    parseInt(clean.slice(2, 4), 16),
+    parseInt(clean.slice(4, 6), 16),
+  ];
+}
+
+/** Maps any custom Pro #hex color to the nearest canonical Free Tier colorPreset via RGB distance. */
+export function nearestFreeColorPreset(hex?: string | null): WalletColorPreset {
+  const rgb = parseHexRgb(hex);
+  if (!rgb) return "dark";
+
+  let bestPreset: WalletColorPreset = "dark";
+  let bestDist = Number.POSITIVE_INFINITY;
+
+  for (const [preset, presetHex] of Object.entries(FREE_TIER_PRESETS) as Array<
+    [WalletColorPreset, string]
+  >) {
+    const target = parseHexRgb(presetHex)!;
+    const dist = (rgb[0] - target[0]) ** 2 + (rgb[1] - target[1]) ** 2 + (rgb[2] - target[2]) ** 2;
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestPreset = preset;
+    }
+  }
+
+  return bestPreset;
+}
 
 export const STRIP_STYLES: Array<{
   id: StripStyle;
@@ -100,23 +178,36 @@ export function serializePassTemplateMeta(params: {
   stripStyle?: StripStyle | null | undefined;
   colorPreset?: WalletColorPreset | null | undefined;
   tierMode?: WalletTierMode | null | undefined;
+  brandColor?: string | null | undefined;
 }): string {
   const base = params.baseId?.trim() || "blank";
   const icon = emojiToIcon(params.stampIcon || "star");
   const style: StripStyle = params.stripStyle || "pizzatown";
-  const preset: WalletColorPreset = params.colorPreset || "green";
   const tier: WalletTierMode = params.tierMode === "pro" ? "pro" : "free";
+  // In Pro mode, always sync the Free Tier backup colorPreset from brandColor via nearestFreeColorPreset
+  const preset: WalletColorPreset =
+    tier === "pro" && params.brandColor
+      ? nearestFreeColorPreset(params.brandColor)
+      : params.colorPreset ||
+        (params.brandColor ? nearestFreeColorPreset(params.brandColor) : "dark");
 
   return `${base}__icon-${icon}__style-${style}__preset-${preset}__tier-${tier}`;
 }
 
-export function parsePassTemplateMeta(templateId?: string | null): PassTemplateMeta {
+export function parsePassTemplateMeta(
+  templateId?: string | null,
+  brandColor?: string | null,
+): PassTemplateMeta {
+  const fallbackPreset: WalletColorPreset = brandColor
+    ? nearestFreeColorPreset(brandColor)
+    : "dark";
+
   if (!templateId || typeof templateId !== "string") {
     return {
       baseId: "blank",
       stampIcon: "star",
       stripStyle: "pizzatown",
-      colorPreset: "green",
+      colorPreset: fallbackPreset,
       tierMode: "free",
     };
   }
@@ -127,7 +218,8 @@ export function parsePassTemplateMeta(templateId?: string | null): PassTemplateM
 
   let stampIcon = "star";
   let stripStyle: StripStyle = "pizzatown";
-  let colorPreset: WalletColorPreset = "green";
+  let colorPreset: WalletColorPreset = fallbackPreset;
+  let hasExplicitPreset = false;
   let tierMode: WalletTierMode = "free";
 
   for (const part of parts.slice(1)) {
@@ -149,6 +241,7 @@ export function parsePassTemplateMeta(templateId?: string | null): PassTemplateM
         p === "orange"
       ) {
         colorPreset = p;
+        hasExplicitPreset = true;
       }
     } else if (part.startsWith("tier-")) {
       const t = part.slice(5);
@@ -175,10 +268,9 @@ export function parsePassTemplateMeta(templateId?: string | null): PassTemplateM
     } else if (baseId.includes("car")) {
       stampIcon = "car";
       colorPreset = "blue";
-    } else if (baseId.includes("blank") || baseId.includes("custom")) {
-      stampIcon = "star";
-      colorPreset = "green";
     }
+  } else if (!hasExplicitPreset && brandColor) {
+    colorPreset = nearestFreeColorPreset(brandColor);
   }
 
   return {
@@ -209,14 +301,15 @@ export function resolveRestaurantBranding(params: {
   nameEn?: string | null | undefined;
   nameAr?: string | null | undefined;
 }): ResolvedRestaurantBranding {
-  const meta = parsePassTemplateMeta(params.templateId);
+  const meta = parsePassTemplateMeta(params.templateId, params.brandColor);
+  const hasExplicitPreset = Boolean(params.templateId?.includes("preset-"));
   const combined =
     `${params.offerEn ?? ""} ${params.offerAr ?? ""} ${params.nameEn ?? ""} ${params.nameAr ?? ""} ${params.brandColor ?? ""}`.toLowerCase();
 
   let stampIcon = meta.stampIcon;
   let colorPreset = meta.colorPreset;
 
-  // Infer industry icon if still default 'star' or if explicit keywords exist in the restaurant's name/offer
+  // Infer industry icon if still default 'star'
   if (stampIcon === "star") {
     if (
       combined.includes("☕") ||
@@ -228,15 +321,17 @@ export function resolveRestaurantBranding(params: {
       combined.includes("latte")
     ) {
       stampIcon = "coffee";
-      if (!params.templateId?.includes("preset-")) colorPreset = "orange";
+      if (!hasExplicitPreset) colorPreset = "orange";
     } else if (
       combined.includes("🍔") ||
       combined.includes("burger") ||
       combined.includes("برجر") ||
-      combined.includes("bistro")
+      combined.includes("bistro") ||
+      combined.includes("pizza") ||
+      combined.includes("بيتزا")
     ) {
       stampIcon = "burger";
-      if (!params.templateId?.includes("preset-")) colorPreset = "red";
+      if (!hasExplicitPreset) colorPreset = "red";
     } else if (
       combined.includes("🥐") ||
       combined.includes("bakery") ||
@@ -246,7 +341,7 @@ export function resolveRestaurantBranding(params: {
       combined.includes("pastry")
     ) {
       stampIcon = "bakery";
-      if (!params.templateId?.includes("preset-")) colorPreset = "orange";
+      if (!hasExplicitPreset) colorPreset = "orange";
     } else if (
       combined.includes("✂️") ||
       combined.includes("salon") ||
@@ -255,7 +350,7 @@ export function resolveRestaurantBranding(params: {
       combined.includes("barber")
     ) {
       stampIcon = "salon";
-      if (!params.templateId?.includes("preset-")) colorPreset = "purple";
+      if (!hasExplicitPreset) colorPreset = "purple";
     } else if (
       combined.includes("🚗") ||
       combined.includes("car") ||
@@ -263,45 +358,31 @@ export function resolveRestaurantBranding(params: {
       combined.includes("سيارات")
     ) {
       stampIcon = "car";
-      if (!params.templateId?.includes("preset-")) colorPreset = "blue";
+      if (!hasExplicitPreset) colorPreset = "blue";
     } else if (combined.includes("🎁") || combined.includes("gift") || combined.includes("هدية")) {
       stampIcon = "gift";
     }
   }
 
-  // Determine true restaurant brand hex color
+  const presetInfo = WALLET_COLOR_PRESETS[colorPreset] ?? WALLET_COLOR_PRESETS.dark;
+  const isUnconfiguredEmerald =
+    params.brandColor?.toLowerCase() === "#059669" && !hasExplicitPreset && stampIcon !== "star";
+
   let brandHex: string;
-  let accentHex: string;
-
-  const presetInfo = WALLET_COLOR_PRESETS[colorPreset] ?? WALLET_COLOR_PRESETS.orange;
-
-  // If brandColor is explicitly provided and not default platform emerald (#059669)
-  const isDefaultPlatformEmerald = params.brandColor?.toLowerCase() === "#059669";
-  if (params.brandColor && !isDefaultPlatformEmerald) {
-    brandHex = params.brandColor;
-    accentHex = params.accentColor || presetInfo.accent;
+  if (meta.tierMode === "free") {
+    brandHex = FREE_TIER_PRESETS[colorPreset];
   } else {
-    // If brandColor was default emerald but restaurant is coffee/burger/etc., use authentic industry hex
-    if (stampIcon === "coffee" || colorPreset === "orange") {
-      brandHex = "#e65100"; // Rich Coffee Orange
-      accentHex = "#fbbf24"; // Warm Amber
-    } else if (stampIcon === "burger" || colorPreset === "red") {
-      brandHex = "#dc2626"; // Crimson
-      accentHex = "#f87171";
-    } else if (stampIcon === "bakery") {
-      brandHex = "#d97706"; // Warm Bakery Amber
-      accentHex = "#fbbf24";
-    } else if (stampIcon === "salon" || colorPreset === "purple") {
-      brandHex = "#581c87";
-      accentHex = "#c084fc";
-    } else if (stampIcon === "car" || colorPreset === "blue") {
-      brandHex = "#1e40af";
-      accentHex = "#60a5fa";
-    } else {
-      brandHex = params.brandColor || presetInfo.hex;
-      accentHex = params.accentColor || presetInfo.accent;
+    brandHex =
+      params.brandColor && !isUnconfiguredEmerald
+        ? params.brandColor
+        : FREE_TIER_PRESETS[colorPreset];
+    if (!hasExplicitPreset) {
+      colorPreset = nearestFreeColorPreset(brandHex);
     }
   }
+
+  const resolvedPresetInfo = WALLET_COLOR_PRESETS[colorPreset] ?? presetInfo;
+  const accentHex = params.accentColor || resolvedPresetInfo.accent;
 
   return {
     stampIcon,

@@ -212,6 +212,7 @@ export function LoyaltySetupStep({
         stripStyle,
         colorPreset,
         tierMode,
+        brandColor: effectiveBrandColor,
       });
 
       await saveOnboardingStepFn({

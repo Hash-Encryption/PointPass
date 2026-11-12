@@ -4,7 +4,9 @@ import type { Locale } from "@/lib/i18n";
 import { Apple, QrCode, Smartphone } from "lucide-react";
 import { generateStampStripSvgDataUri } from "@/lib/strip-svg";
 import {
+  FREE_TIER_PRESETS,
   iconToEmoji,
+  nearestFreeColorPreset,
   WALLET_COLOR_PRESETS,
   type StripStyle,
   type WalletColorPreset,
@@ -51,7 +53,7 @@ export function designFromTemplate(tpl: PassTemplate, program: ProgramType): Pas
     stampIcon: "⭐",
     stripStyle: "pizzatown",
     tierMode: "free",
-    colorPreset: "green",
+    colorPreset: nearestFreeColorPreset(tpl.colors.background),
   };
 }
 
@@ -66,8 +68,8 @@ function PassBody({
 }) {
   const isFree = design.tierMode === "free";
   const presetHex =
-    isFree && design.colorPreset && WALLET_COLOR_PRESETS[design.colorPreset]
-      ? WALLET_COLOR_PRESETS[design.colorPreset].hex
+    isFree && design.colorPreset && FREE_TIER_PRESETS[design.colorPreset]
+      ? FREE_TIER_PRESETS[design.colorPreset]
       : design.background;
 
   const fg = autoContrast(presetHex);

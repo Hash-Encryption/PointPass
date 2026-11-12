@@ -38,10 +38,16 @@ import {
   Zap,
 } from "lucide-react";
 import {
+  FREE_TIER_PRESETS,
   getStoredWalletTier,
+  nearestFreeColorPreset,
+  parsePassTemplateMeta,
+  serializePassTemplateMeta,
   setStoredWalletTier,
   STRIP_STYLES,
+  WALLET_COLOR_PRESETS,
   type StripStyle,
+  type WalletColorPreset,
   type WalletTierMode,
 } from "@/lib/wallet-tier";
 import { generateStampStripSvgDataUri } from "@/lib/strip-svg";
@@ -71,6 +77,10 @@ type Tenant = {
   custom_domain: string | null;
   merchant_email: string | null;
   owner_id: string | null;
+  brand_color?: string | null;
+  accent_color?: string | null;
+  target_stamps?: number | null;
+  template_id?: string | null;
 };
 
 type HardwareDispatch = {
@@ -128,6 +138,8 @@ function AdminPortal() {
   const [inspectorStamps, setInspectorStamps] = useState(3);
   const [inspectorBrand, setInspectorBrand] = useState("#1A1412");
   const [inspectorAccent, setInspectorAccent] = useState("#D97706");
+  const [inspectorPreset, setInspectorPreset] = useState<WalletColorPreset>("orange");
+  const [syncTenantId, setSyncTenantId] = useState("");
 
   const inspectorStripUri = useMemo(() => {
     try {
@@ -207,7 +219,7 @@ function AdminPortal() {
       const { data, error } = await supabase
         .from("businesses")
         .select(
-          "id,name_ar,name_en,slug,plan,status,active_passes,redemptions,custom_domain,merchant_email,owner_id",
+          "id,name_ar,name_en,slug,plan,status,active_passes,redemptions,custom_domain,merchant_email,owner_id,brand_color,accent_color,target_stamps,template_id",
         )
         .order("created_at", { ascending: false })
         .limit(50);
@@ -238,7 +250,50 @@ function AdminPortal() {
       setDomainTenantId(tenants[0].id);
       setDomain(tenants[0].custom_domain ?? "");
     }
-  }, [domainTenantId, tenants]);
+    if (!syncTenantId && tenants[0]) {
+      setSyncTenantId(tenants[0].id);
+    }
+  }, [domainTenantId, syncTenantId, tenants]);
+
+  const syncCardSpecMutation = useMutation({
+    mutationFn: async () => {
+      if (!syncTenantId) throw new Error("Choose a business first");
+      const targetPreset =
+        tierMode === "pro" ? nearestFreeColorPreset(inspectorBrand) : inspectorPreset;
+      const effectiveBrand = tierMode === "free" ? FREE_TIER_PRESETS[targetPreset] : inspectorBrand;
+      const effectiveAccent =
+        tierMode === "free" ? WALLET_COLOR_PRESETS[targetPreset].accent : inspectorAccent;
+      const existing = tenants.find((t) => t.id === syncTenantId);
+      const existingMeta = parsePassTemplateMeta(existing?.template_id, effectiveBrand);
+      const serialized = serializePassTemplateMeta({
+        baseId: existingMeta.baseId,
+        stampIcon: inspectorIcon,
+        stripStyle: inspectorStyle,
+        colorPreset: targetPreset,
+        tierMode,
+        brandColor: effectiveBrand,
+      });
+      const { error } = await supabase
+        .from("businesses")
+        .update({
+          template_id: serialized,
+          brand_color: effectiveBrand,
+          accent_color: effectiveAccent,
+          target_stamps: inspectorTarget,
+        })
+        .eq("id", syncTenantId);
+      if (error) throw error;
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["tenants"] });
+      toast.success(
+        ar
+          ? "تم حفظ ومزامنة مواصفات البطاقة مباشرة في قاعدة البيانات"
+          : "Card spec synced directly to public.businesses",
+      );
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
 
   const statusMutation = useMutation({
     mutationFn: async (tenant: Tenant) => {
@@ -585,7 +640,11 @@ function AdminPortal() {
                   <Input
                     type="color"
                     value={inspectorBrand}
-                    onChange={(e) => setInspectorBrand(e.target.value)}
+                    onChange={(e) => {
+                      const hex = e.target.value;
+                      setInspectorBrand(hex);
+                      setInspectorPreset(nearestFreeColorPreset(hex));
+                    }}
                     title="Brand Color"
                     className="size-8 p-0.5 rounded-lg bg-zinc-950 border border-zinc-800 cursor-pointer"
                   />
@@ -596,6 +655,25 @@ function AdminPortal() {
                     title="Accent Color"
                     className="size-8 p-0.5 rounded-lg bg-zinc-950 border border-zinc-800 cursor-pointer"
                   />
+                  <select
+                    aria-label={ar ? "لون الوضع المجاني الاحتياطي" : "Free backup preset"}
+                    value={inspectorPreset}
+                    onChange={(e) => {
+                      const p = e.target.value as WalletColorPreset;
+                      setInspectorPreset(p);
+                      if (tierMode === "free") {
+                        setInspectorBrand(FREE_TIER_PRESETS[p]);
+                        setInspectorAccent(WALLET_COLOR_PRESETS[p].accent);
+                      }
+                    }}
+                    className="h-8 rounded-lg border border-zinc-800 bg-zinc-950 px-2 text-[11px] text-zinc-200"
+                  >
+                    {(Object.keys(WALLET_COLOR_PRESETS) as WalletColorPreset[]).map((key) => (
+                      <option key={key} value={key}>
+                        {ar ? WALLET_COLOR_PRESETS[key].nameAr : WALLET_COLOR_PRESETS[key].nameEn}
+                      </option>
+                    ))}
+                  </select>
                   {inspectorStripUri && (
                     <a
                       href={`/api/strip/preview.png?stamps=${inspectorStamps}&target=${inspectorTarget}&brand=${encodeURIComponent(inspectorBrand)}&accent=${encodeURIComponent(inspectorAccent)}&icon=${encodeURIComponent(inspectorIcon)}&style=${inspectorStyle}`}
@@ -611,6 +689,41 @@ function AdminPortal() {
                 </div>
               </div>
             </div>
+
+            {tenants.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-zinc-800/80">
+                <Label htmlFor="sync-tenant" className="text-xs text-zinc-300">
+                  {ar ? "مزامنة مباشرة مع متجر:" : "Save spec to business:"}
+                </Label>
+                <select
+                  id="sync-tenant"
+                  value={syncTenantId}
+                  onChange={(e) => setSyncTenantId(e.target.value)}
+                  className="h-8 rounded-lg border border-zinc-800 bg-zinc-950 px-2.5 text-xs text-zinc-200"
+                >
+                  {tenants.map((tenant) => (
+                    <option key={tenant.id} value={tenant.id}>
+                      {tenant.slug}
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={syncCardSpecMutation.isPending || !syncTenantId}
+                  onClick={() => syncCardSpecMutation.mutate()}
+                  className="h-8 text-xs"
+                >
+                  {syncCardSpecMutation.isPending ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : ar ? (
+                    "حفظ المواصفات في القاعدة"
+                  ) : (
+                    "Sync Free + Pro Spec to DB"
+                  )}
+                </Button>
+              </div>
+            )}
 
             {/* Generated Strip Live Viewport */}
             <div className="pt-2">

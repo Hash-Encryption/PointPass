@@ -17,9 +17,13 @@ import { useLocale } from "@/lib/i18n";
 import { supabase } from "@/lib/supabase";
 import { PASS_TEMPLATES, autoContrast, type ProgramType } from "@/constants/defaultTemplates";
 import {
+  FREE_TIER_PRESETS,
   getStoredWalletTier,
+  nearestFreeColorPreset,
   parsePassTemplateMeta,
+  resolveRestaurantBranding,
   serializePassTemplateMeta,
+  setStoredWalletTier,
   STRIP_STYLES,
   WALLET_COLOR_PRESETS,
   type StripStyle,
@@ -114,7 +118,7 @@ function MerchantDashboard() {
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const [tierMode, setTierMode] = useState<WalletTierMode>(getStoredWalletTier);
-  const [colorPreset, setColorPreset] = useState<WalletColorPreset>("green");
+  const [colorPreset, setColorPreset] = useState<WalletColorPreset>("dark");
   const [stripStyle, setStripStyle] = useState<StripStyle>("pizzatown");
   const [stampIcon, setStampIcon] = useState<string>("⭐");
   const [activeTemplateId, setActiveTemplateId] = useState<string>("blank");
@@ -244,33 +248,31 @@ function MerchantDashboard() {
     if (!business) return;
     if (!businessId) setBusinessId(business.id);
     setProgram(business.program_type);
-    let initialIcon = "⭐";
-    let initialStyle: StripStyle = "pizzatown";
-    let initialPreset: WalletColorPreset = "green";
-    let initialBaseId = "blank";
+    const meta = parsePassTemplateMeta(business.template_id, business.brand_color);
+    const resolved = resolveRestaurantBranding({
+      brandColor: business.brand_color,
+      accentColor: business.accent_color,
+      templateId: business.template_id,
+      offerEn: business.offer_en,
+      offerAr: business.offer_ar,
+      nameEn: business.name_en,
+      nameAr: business.name_ar,
+    });
 
-    if (business.template_id) {
-      const meta = parsePassTemplateMeta(business.template_id);
-      initialIcon = meta.stampIcon;
-      initialStyle = meta.stripStyle;
-      initialPreset = meta.colorPreset;
-      initialBaseId = meta.baseId || "blank";
-      if (meta.tierMode) {
-        setTierMode(meta.tierMode);
-      }
+    setStampIcon(resolved.stampEmoji);
+    setStripStyle(resolved.stripStyle);
+    setColorPreset(resolved.colorPreset);
+    setActiveTemplateId(meta.baseId || "blank");
+    if (business.template_id?.includes("tier-")) {
+      setTierMode(resolved.tierMode);
     }
-
-    setStampIcon(initialIcon);
-    setStripStyle(initialStyle);
-    setColorPreset(initialPreset);
-    setActiveTemplateId(initialBaseId);
 
     setDesign({
       businessName: business.name_ar,
       businessNameEn: business.name_en,
       logoUrl: business.logo_url,
-      background: business.brand_color,
-      accent: business.accent_color,
+      background: resolved.brandHex,
+      accent: resolved.accentHex,
       headline: business.offer_ar ?? "",
       headlineEn: business.offer_en ?? "",
       subline: "شكراً لولائك",
@@ -475,18 +477,24 @@ function MerchantDashboard() {
       }
       logoUrl = supabase.storage.from("business-assets").getPublicUrl(path).data.publicUrl;
     }
+    const syncedPreset: WalletColorPreset =
+      tierMode === "pro" ? nearestFreeColorPreset(design.background) : colorPreset;
+    const effectiveBrandColor =
+      tierMode === "free" ? FREE_TIER_PRESETS[syncedPreset] : design.background;
+    const effectiveAccentColor =
+      tierMode === "free" ? WALLET_COLOR_PRESETS[syncedPreset].accent : design.accent;
+
     const metaString = serializePassTemplateMeta({
       baseId: activeTemplateId,
       stampIcon,
       stripStyle,
-      colorPreset,
+      colorPreset: syncedPreset,
       tierMode,
+      brandColor: effectiveBrandColor,
     });
 
-    const effectiveBrandColor =
-      tierMode === "free" ? WALLET_COLOR_PRESETS[colorPreset].hex : design.background;
-    const effectiveAccentColor =
-      tierMode === "free" ? WALLET_COLOR_PRESETS[colorPreset].accent : design.accent;
+    setColorPreset(syncedPreset);
+    setStoredWalletTier(tierMode);
 
     await updateBusiness(
       {
@@ -945,18 +953,44 @@ function MerchantDashboard() {
                       </div>
                     </div>
 
-                    <div className="shrink-0">
-                      {tierMode === "free" ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-                          <ShieldCheck className="size-3.5" />
-                          <span>{ar ? "وضع المجاني الفوري" : "Free Mode"}</span>
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
-                          <Zap className="size-3.5" />
-                          <span>{ar ? "وضع برو (Retina Strip)" : "Pro Studio"}</span>
-                        </span>
-                      )}
+                    <div
+                      role="group"
+                      aria-label={ar ? "وضع المحرر" : "Editor tier mode"}
+                      className="inline-flex rounded-xl border border-border bg-muted/40 p-1 shrink-0"
+                    >
+                      <button
+                        type="button"
+                        aria-pressed={tierMode === "free"}
+                        onClick={() => {
+                          setColorPreset(nearestFreeColorPreset(design.background));
+                          setTierMode("free");
+                          setStoredWalletTier("free");
+                        }}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                          tierMode === "free"
+                            ? "bg-background text-emerald-600 dark:text-emerald-400 shadow-xs border border-emerald-500/30"
+                            : "text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        <ShieldCheck className="size-3.5" />
+                        <span>{ar ? "البسيط (مجاني)" : "Simple (Free)"}</span>
+                      </button>
+                      <button
+                        type="button"
+                        aria-pressed={tierMode === "pro"}
+                        onClick={() => {
+                          setTierMode("pro");
+                          setStoredWalletTier("pro");
+                        }}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                          tierMode === "pro"
+                            ? "bg-background text-amber-600 dark:text-amber-400 shadow-xs border border-amber-500/30"
+                            : "text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        <Zap className="size-3.5" />
+                        <span>{ar ? "استوديو برو" : "Pro Studio"}</span>
+                      </button>
                     </div>
                   </div>
 
@@ -1235,14 +1269,44 @@ function MerchantDashboard() {
                                   className="h-10 w-16 p-1 cursor-pointer"
                                   value={design.background}
                                   onChange={(e) => {
-                                    setDesign({ ...design, background: e.target.value });
+                                    const nextHex = e.target.value;
+                                    setDesign({ ...design, background: nextHex });
+                                    setColorPreset(nearestFreeColorPreset(nextHex));
                                     setActiveTemplateId("custom");
                                   }}
                                 />
+                                <Input
+                                  value={design.background}
+                                  onChange={(e) => {
+                                    const nextHex = e.target.value;
+                                    setDesign({ ...design, background: nextHex });
+                                    if (/^#[0-9a-fA-F]{6}$/.test(nextHex)) {
+                                      setColorPreset(nearestFreeColorPreset(nextHex));
+                                    }
+                                    setActiveTemplateId("custom");
+                                  }}
+                                  dir="ltr"
+                                  aria-label={ar ? "كود لون الخلفية" : "Background hex"}
+                                  className="font-mono text-xs h-10 w-24"
+                                />
                                 <Badge variant="secondary">
-                                  {ar ? "تباين تلقائي:" : "Auto contrast:"} {fg}
+                                  {ar ? "تباين:" : "Contrast:"} {fg}
                                 </Badge>
                               </div>
+                              <p className="mt-1.5 text-[11px] text-muted-foreground flex items-center gap-1.5">
+                                <span
+                                  className="inline-block size-2.5 rounded-full border border-white/20"
+                                  style={{
+                                    backgroundColor:
+                                      FREE_TIER_PRESETS[nearestFreeColorPreset(design.background)],
+                                  }}
+                                />
+                                <span>
+                                  {ar
+                                    ? `نسخة الاحتياط المجانية: ${WALLET_COLOR_PRESETS[nearestFreeColorPreset(design.background)].nameAr}`
+                                    : `Free backup preset: ${WALLET_COLOR_PRESETS[nearestFreeColorPreset(design.background)].nameEn}`}
+                                </span>
+                              </p>
                             </div>
                             <div>
                               <Label htmlFor="ac">

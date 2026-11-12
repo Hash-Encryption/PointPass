@@ -6,8 +6,11 @@ import {
   resolveColorPreset,
 } from "../src/lib/wallet-payload.ts";
 import {
+  FREE_TIER_PRESETS,
   iconToEmoji,
+  nearestFreeColorPreset,
   parsePassTemplateMeta,
+  resolveRestaurantBranding,
   serializePassTemplateMeta,
 } from "../src/lib/wallet-tier.ts";
 
@@ -231,6 +234,88 @@ assert.equal(iconToEmoji(parsedMeta.stampIcon), "🍔");
 assert.equal(parsedMeta.stripStyle, "pizzatown");
 assert.equal(parsedMeta.colorPreset, "red");
 assert.equal(parsedMeta.tierMode, "free");
+
+// Assert FREE_TIER_PRESETS exact hex values & nearestFreeColorPreset RGB mapping
+assert.equal(FREE_TIER_PRESETS.orange, "#e65100");
+assert.equal(FREE_TIER_PRESETS.red, "#dc2626");
+assert.equal(FREE_TIER_PRESETS.blue, "#2563eb");
+assert.equal(FREE_TIER_PRESETS.purple, "#7c3aed");
+assert.equal(FREE_TIER_PRESETS.dark, "#18181b");
+assert.equal(FREE_TIER_PRESETS.green, "#059669");
+
+assert.equal(nearestFreeColorPreset("#e65100"), "orange");
+assert.equal(nearestFreeColorPreset("#C2410C"), "orange");
+assert.equal(nearestFreeColorPreset("#dc2626"), "red");
+assert.equal(nearestFreeColorPreset("#2563eb"), "blue");
+assert.equal(nearestFreeColorPreset("#7c3aed"), "purple");
+assert.equal(nearestFreeColorPreset("#18181b"), "dark");
+assert.equal(nearestFreeColorPreset("#121214"), "dark");
+assert.equal(nearestFreeColorPreset("#059669"), "green");
+
+// Assert Pro tier serialization stores nearest Free Tier colorPreset backup
+const proSerialized = serializePassTemplateMeta({
+  baseId: "tpl_stamp_coffee_8",
+  stampIcon: "☕",
+  stripStyle: "pizzatown",
+  colorPreset: "green", // stale preset must be overridden by brandColor in Pro mode
+  tierMode: "pro",
+  brandColor: "#dc2626",
+});
+assert.equal(
+  proSerialized,
+  "tpl_stamp_coffee_8__icon-coffee__style-pizzatown__preset-red__tier-pro",
+);
+
+// Assert testpass DB row resolves consistently for both Free Tier web & WalletWallet payload
+const testpassBranding = resolveRestaurantBranding({
+  brandColor: "#e65100",
+  templateId: "tpl_stamp_coffee_8__icon-coffee__style-pizzatown__preset-orange__tier-free",
+  offerEn: "Free handcrafted coffee ☕",
+  nameEn: "testpass",
+});
+assert.equal(testpassBranding.brandHex, "#e65100");
+assert.equal(testpassBranding.colorPreset, "orange");
+assert.equal(testpassBranding.stampIcon, "coffee");
+assert.equal(testpassBranding.stampEmoji, "☕");
+assert.equal(testpassBranding.tierMode, "free");
+
+const testpassPayload = buildWalletPassPayload({
+  serial: "PP-TESTPASS",
+  businessName: "testpass",
+  offer: "Free handcrafted coffee ☕",
+  programType: "stamp",
+  stamps: 1,
+  points: 0,
+  morphed: false,
+  targetStamps: 8,
+  brandColor: testpassBranding.brandHex,
+  accentColor: testpassBranding.accentHex,
+  stampIcon: testpassBranding.stampIcon,
+  colorPreset: testpassBranding.colorPreset,
+  stripStyle: testpassBranding.stripStyle,
+  tierMode: testpassBranding.tierMode,
+});
+assert.equal(testpassPayload.colorPreset, "orange");
+assert.equal(testpassPayload.logoText, "☕ testpass");
+assert.equal(testpassPayload.headerFields[0].value, "1/8");
+assert.equal(testpassPayload.primaryFields[0].value, "☕ ⚪ ⚪ ⚪ ⚪ ⚪ ⚪ 🎁");
+
+// Assert Pro-to-Free fallback preserves restaurant's saved Free Tier backup (never emerald green)
+const proBackupPayload = buildBaselineWalletPassPayload({
+  serial: "PP-PROBACK",
+  businessName: "Roastery",
+  offer: "Free Latte",
+  programType: "stamp",
+  stamps: 2,
+  points: 0,
+  morphed: false,
+  targetStamps: 8,
+  brandColor: "#1A1412",
+  stampIcon: "coffee",
+  colorPreset: nearestFreeColorPreset("#D97706"),
+});
+assert.equal(proBackupPayload.colorPreset, "orange");
+assert.equal(proBackupPayload.logoText, "☕ Roastery");
 
 const walletSource = readFileSync(
   new URL("../src/lib/wallet.functions.ts", import.meta.url),

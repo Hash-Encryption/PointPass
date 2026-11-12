@@ -1,5 +1,6 @@
 import {
   iconToEmoji,
+  nearestFreeColorPreset,
   type StripStyle,
   type WalletColorPreset,
   type WalletTierMode,
@@ -78,9 +79,9 @@ export function resolveColorPreset(
     if (l < 0.35) return fromAccent;
   }
 
-  if (fromBrand) return fromBrand;
+  if (fromBrand) return nearestFreeColorPreset(brandColor);
   if (fromAccent) return fromAccent;
-  return "dark";
+  return nearestFreeColorPreset(brandColor);
 }
 
 /**
