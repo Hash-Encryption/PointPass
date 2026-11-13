@@ -63,7 +63,7 @@ as $$
   select
     b.id,
     b.slug,
-    coalesce(nullif(b.name_ar, ''), b.name_en, b.slug) as name,
+    coalesce(nullif(b.name_en, ''), nullif(b.name_ar, ''), b.slug) as name,
     b.name_ar,
     b.name_en,
     b.logo_url,

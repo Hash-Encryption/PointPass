@@ -217,23 +217,24 @@ const BUSINESS_BRANDING_COLUMNS =
   "id,slug,name_ar,name_en,logo_url,brand_color,accent_color,program_type,offer_ar,offer_en,target_stamps,sar_per_point,points_per_reward,custom_domain,template_id,status";
 
 type BusinessBrandingRow = {
-  id?: string | null;
-  slug?: string | null;
-  name_ar?: string | null;
-  name_en?: string | null;
-  logo_url?: string | null;
-  brand_color?: string | null;
-  accent_color?: string | null;
-  program_type?: string | null;
-  offer_ar?: string | null;
-  offer_en?: string | null;
-  target_stamps?: number | null;
-  stamps_required?: number | null;
-  sar_per_point?: number | null;
-  points_per_reward?: number | null;
-  custom_domain?: string | null;
-  template_id?: string | null;
-  status?: string | null;
+  id?: string | null | undefined;
+  slug?: string | null | undefined;
+  name?: string | null | undefined;
+  name_ar?: string | null | undefined;
+  name_en?: string | null | undefined;
+  logo_url?: string | null | undefined;
+  brand_color?: string | null | undefined;
+  accent_color?: string | null | undefined;
+  program_type?: string | null | undefined;
+  offer_ar?: string | null | undefined;
+  offer_en?: string | null | undefined;
+  target_stamps?: number | null | undefined;
+  stamps_required?: number | null | undefined;
+  sar_per_point?: number | null | undefined;
+  points_per_reward?: number | null | undefined;
+  custom_domain?: string | null | undefined;
+  template_id?: string | null | undefined;
+  status?: string | null | undefined;
 };
 
 /**
@@ -272,6 +273,7 @@ async function fetchBusinessRowBySlug(
           ...biz,
           id: r.id ?? biz?.id ?? null,
           slug: r.slug ?? biz?.slug ?? cleanSlug,
+          name: r.name ?? (biz ? biz.name_en || biz.name_ar || biz.slug : null),
           name_ar: r.name_ar ?? biz?.name_ar ?? null,
           name_en: r.name_en ?? biz?.name_en ?? null,
           logo_url: r.logo_url ?? biz?.logo_url ?? null,
@@ -319,6 +321,7 @@ export const getPublicBusinessBySlug = createServerFn({ method: "GET" })
     const offerEn = biz.offer_en || "";
     const nameAr = biz.name_ar || "";
     const nameEn = biz.name_en || "";
+    const computedName = biz.name || nameEn || nameAr || cleanSlug;
 
     const branding = resolveRestaurantBranding({
       brandColor: biz.brand_color ?? null,
@@ -335,7 +338,7 @@ export const getPublicBusinessBySlug = createServerFn({ method: "GET" })
       error: null,
       business: {
         id: biz.id || "",
-        name: nameAr || nameEn || cleanSlug,
+        name: computedName,
         name_ar: nameAr,
         name_en: nameEn,
         slug: biz.slug || cleanSlug,
