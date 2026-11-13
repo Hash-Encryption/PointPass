@@ -459,3 +459,143 @@ export function setStoredWalletTier(tier: WalletTierMode): void {
     // LocalStorage quota or access exception safety
   }
 }
+
+/**
+ * Normalizes phone numbers with special handling for Saudi mobiles (E.164 canonical: +9665XXXXXXXX).
+ */
+export function normalizePhoneNumber(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  // 1. Convert Arabic-Indic numerals ٠-٩ to western 0-9
+  let cleaned = raw.replace(/[٠-٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)));
+  // 2. Strip spaces, dashes, parens, dots, slashes, non-digits (preserving leading + if any)
+  cleaned = cleaned.trim().replace(/[^0-9+]/g, "");
+  if (!cleaned) return null;
+
+  // 3. Saudi mobile normalization (E.164 canonical: +9665XXXXXXXX)
+  // Form: 05xxxxxxxx (10 digits)
+  if (/^05[0-9]{8}$/.test(cleaned)) {
+    return "+9665" + cleaned.slice(2);
+  }
+  // Form: 5xxxxxxxx (9 digits)
+  if (/^5[0-9]{8}$/.test(cleaned)) {
+    return "+9665" + cleaned.slice(1);
+  }
+  // Form: 9665xxxxxxxx (12 digits)
+  if (/^9665[0-9]{8}$/.test(cleaned)) {
+    return "+" + cleaned;
+  }
+  // Form: 009665xxxxxxxx (14 digits)
+  if (/^009665[0-9]{8}$/.test(cleaned)) {
+    return "+9665" + cleaned.slice(6);
+  }
+  // Form: +9665xxxxxxxx (13 chars)
+  if (/^\+9665[0-9]{8}$/.test(cleaned)) {
+    return cleaned;
+  }
+  // Valid international E.164: + followed by 7-15 digits
+  if (/^\+[1-9][0-9]{6,14}$/.test(cleaned)) {
+    return cleaned;
+  }
+  // 00 followed by country code + digits
+  if (/^00[1-9][0-9]{6,14}$/.test(cleaned)) {
+    return "+" + cleaned.slice(2);
+  }
+
+  return cleaned;
+}
+
+/**
+ * Generates a short, privacy-safe numeric pass code formatted as PP-XXXXX.
+ * Strictly 5 digits (10,000 to 99,999) while existingPassCount < 90,000.
+ * Automatically scales to 6 digits (100,000 to 999,999) only when existingPassCount >= 90,000
+ * or when forceSixDigits is true (e.g. after 5-digit collision retries exhaust).
+ */
+export function generateNumericPassCode(existingPassCount = 0, forceSixDigits = false): string {
+  const useSixDigits = forceSixDigits || existingPassCount >= 90_000;
+  const min = useSixDigits ? 100_000 : 10_000;
+  const max = useSixDigits ? 999_999 : 99_999;
+  const randomNum = Math.floor(min + Math.random() * (max - min + 1));
+  return `PP-${randomNum}`;
+}
+
+export function generateStorePassCode(existingPassCount = 0, attempt = 0): string {
+  return generateNumericPassCode(existingPassCount, attempt >= 12);
+}
+
+export interface CashierLookupNormalizationResult {
+  normalized: string;
+  isPhone: boolean;
+  cleanDigits?: string;
+}
+
+/**
+ * Normalizes input from POS keyboard, handheld scanner, or QR camera:
+ * - Raw 5-6 digits (e.g. "48291" or "482-91") -> "PP-48291"
+ * - Explicit "pp-XXXXX" -> "PP-XXXXX" (preserves legacy alphanumeric PP-... codes)
+ * - Phone numbers (05... / 5... / +9665...) -> canonical E.164
+ * - Full QR URLs -> extracts and normalizes the embedded pass code
+ */
+export function normalizeCashierLookupQuery(raw: string): CashierLookupNormalizationResult {
+  let cleaned = (raw || "").trim();
+
+  // 1. Extract from URL if QR scanned as full URL
+  try {
+    if (cleaned.startsWith("http://") || cleaned.startsWith("https://")) {
+      const url = new URL(cleaned);
+      const fromParam = url.searchParams.get("serial") || url.searchParams.get("pass");
+      if (fromParam) {
+        cleaned = fromParam.trim();
+      } else {
+        const segments = url.pathname.split("/").filter(Boolean);
+        const last = segments[segments.length - 1];
+        if (last && (last.toUpperCase().startsWith("PP-") || last.length >= 5)) {
+          cleaned = last.trim();
+        }
+      }
+    }
+  } catch {
+    // Not a valid URL, keep cleaned as-is
+  }
+
+  // 2. Explicit PP-... Code (case-insensitive, numeric or legacy alphanumeric)
+  const ppMatch = cleaned.match(/^pp-([a-zA-Z0-9_-]+)$/i);
+  if (ppMatch?.[1]) {
+    return {
+      normalized: `PP-${ppMatch[1].toUpperCase()}`,
+      isPhone: false,
+    };
+  }
+
+  // Also check if PP- is embedded in scanned string
+  const embeddedMatch = cleaned.match(/PP-[A-Za-z0-9_-]+/i);
+  if (embeddedMatch?.[0]) {
+    return {
+      normalized: embeddedMatch[0].toUpperCase(),
+      isPhone: false,
+    };
+  }
+
+  // 3. Raw 5-to-6 digit numeric code (with optional hyphens/spaces, e.g. 48291 or 482-91)
+  const digitsOnly = cleaned.replace(/[\s-]/g, "");
+  if (/^\d{5,6}$/.test(digitsOnly)) {
+    return {
+      normalized: `PP-${digitsOnly}`,
+      isPhone: false,
+    };
+  }
+
+  // 4. Saudi Phone Number or International Phone
+  const normalizedPhone = normalizePhoneNumber(cleaned);
+  if (normalizedPhone || /^[0-9+() -]{7,20}$/.test(cleaned)) {
+    return {
+      normalized: normalizedPhone || cleaned,
+      isPhone: true,
+      cleanDigits: digitsOnly,
+    };
+  }
+
+  return {
+    normalized: cleaned,
+    isPhone: false,
+  };
+}

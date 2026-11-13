@@ -32,6 +32,7 @@ import {
 } from "@/lib/wallet.functions";
 import {
   iconToEmoji,
+  normalizeCashierLookupQuery,
   parsePassTemplateMeta,
   resolveRestaurantBranding,
   type PassTemplateMeta,
@@ -172,24 +173,8 @@ function triggerHaptic(type: "scan" | "stamp" | "reward" = "scan") {
 }
 
 function extractSerialFromQR(text: string): string {
-  const trimmed = text.trim();
-  try {
-    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-      const url = new URL(trimmed);
-      const fromParam = url.searchParams.get("serial") || url.searchParams.get("pass");
-      if (fromParam) return fromParam.trim();
-      const segments = url.pathname.split("/").filter(Boolean);
-      const last = segments[segments.length - 1];
-      if (last && (last.startsWith("PP-") || last.length > 5)) {
-        return last.trim();
-      }
-    }
-  } catch {
-    // Fall back to regex / raw
-  }
-  const match = trimmed.match(/PP-[A-Za-z0-9_-]+/i);
-  if (match) return match[0];
-  return trimmed;
+  const { normalized } = normalizeCashierLookupQuery(text);
+  return normalized;
 }
 
 function getRecentPasses(slug: string): RecentPassItem[] {
@@ -658,9 +643,10 @@ export function CashierTerminal() {
 
   async function handleManualSubmit(e?: React.FormEvent) {
     if (e) e.preventDefault();
-    if (!business || !manualInput.trim()) return;
+    const rawQuery = manualInput.trim();
+    if (!business || !rawQuery) return;
 
-    const query = manualInput.trim();
+    const { normalized: query } = normalizeCashierLookupQuery(rawQuery);
     setLookupLoading(true);
 
     try {
@@ -1475,8 +1461,8 @@ export function CashierTerminal() {
                   <Input
                     placeholder={
                       ar
-                        ? "اكتب رقم الجوال (05...) أو كود البطاقة (PP-...)..."
-                        : "Phone (05...) or Pass Code (PP-...)..."
+                        ? "اكتب كود البطاقة (48291) أو رقم الجوال (05...)..."
+                        : "Enter 5-digit code (48291) or phone (05...)..."
                     }
                     value={manualInput}
                     onChange={(e) => setManualInput(e.target.value)}
@@ -1515,8 +1501,8 @@ export function CashierTerminal() {
                     </h2>
                     <p className="text-xs text-zinc-400 leading-relaxed">
                       {ar
-                        ? "أدخل رقم جوال العميل (05XXXXXXXX) الذي يحفظه دائماً، أو معرّف البطاقة الظاهر على واجهة البطاقة (PP-XXXXXX)"
-                        : "Enter the customer's phone number (05... / +966...) or the Pass Code (PP-...) printed on their pass"}
+                        ? "أدخل كود البطاقة المكون من 5 أرقام (48291 أو PP-48291) أو رقم جوال العميل (05XXXXXXXX)"
+                        : "Enter customer's 5-digit code (48291 / PP-48291) or phone number (05...)"}
                     </p>
                   </div>
 
@@ -1524,9 +1510,7 @@ export function CashierTerminal() {
                     <div className="relative">
                       <Input
                         autoFocus
-                        placeholder={
-                          ar ? "مثال: 0501234567 أو PP-482019" : "e.g., 0501234567 or PP-482019"
-                        }
+                        placeholder={ar ? "مثال: 48291 أو 0501234567" : "e.g., 48291 or 0501234567"}
                         value={manualInput}
                         onChange={(e) => setManualInput(e.target.value)}
                         dir="ltr"

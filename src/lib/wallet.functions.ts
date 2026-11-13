@@ -9,7 +9,14 @@ import {
   buildWalletPassPayload,
   type WalletPassState,
 } from "@/lib/wallet-payload";
-import { iconToEmoji, parsePassTemplateMeta, resolveRestaurantBranding } from "@/lib/wallet-tier";
+import {
+  generateNumericPassCode,
+  iconToEmoji,
+  normalizeCashierLookupQuery,
+  normalizePhoneNumber as normalizeCustomerPhoneTier,
+  parsePassTemplateMeta,
+  resolveRestaurantBranding,
+} from "@/lib/wallet-tier";
 import { generateStampStripDataUri } from "@/lib/strip-generator";
 import { captureAppError } from "@/lib/observability";
 
@@ -167,44 +174,7 @@ async function walletFetch(
 }
 
 export function normalizePhoneNumber(raw: string | null | undefined): string | null {
-  if (!raw) return null;
-  // 1. Convert Arabic-Indic numerals ٠-٩ to western 0-9
-  let cleaned = raw.replace(/[٠-٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)));
-  // 2. Strip spaces, dashes, parens, dots, slashes, non-digits (preserving leading + if any)
-  cleaned = cleaned.trim().replace(/[^0-9+]/g, "");
-  if (!cleaned) return null;
-
-  // 3. Saudi mobile normalization (E.164 canonical: +9665XXXXXXXX)
-  // Form: 05xxxxxxxx (10 digits)
-  if (/^05[0-9]{8}$/.test(cleaned)) {
-    return "+9665" + cleaned.slice(2);
-  }
-  // Form: 5xxxxxxxx (9 digits)
-  if (/^5[0-9]{8}$/.test(cleaned)) {
-    return "+9665" + cleaned.slice(1);
-  }
-  // Form: 9665xxxxxxxx (12 digits)
-  if (/^9665[0-9]{8}$/.test(cleaned)) {
-    return "+" + cleaned;
-  }
-  // Form: 009665xxxxxxxx (14 digits)
-  if (/^009665[0-9]{8}$/.test(cleaned)) {
-    return "+9665" + cleaned.slice(6);
-  }
-  // Form: +9665xxxxxxxx (13 chars)
-  if (/^\+9665[0-9]{8}$/.test(cleaned)) {
-    return cleaned;
-  }
-  // Valid international E.164: + followed by 7-15 digits
-  if (/^\+[1-9][0-9]{6,14}$/.test(cleaned)) {
-    return cleaned;
-  }
-  // 00 followed by country code + digits
-  if (/^00[1-9][0-9]{6,14}$/.test(cleaned)) {
-    return "+" + cleaned.slice(2);
-  }
-
-  return cleaned;
+  return normalizeCustomerPhoneTier(raw);
 }
 
 export const normalizeCustomerPhone = normalizePhoneNumber;
@@ -511,29 +481,69 @@ export const createWalletPass = createServerFn({ method: "POST" })
     const isReturning = Boolean(claim.is_resumed);
     let effectiveSerial = claim.pass_serial;
 
-    // For brand-new passes, ensure the serial has the canonical PP- prefix
-    if (!isReturning && !effectiveSerial.startsWith("PP-")) {
-      const candidateSerial = `PP-${effectiveSerial
-        .replace(/[^a-zA-Z0-9]/g, "")
-        .slice(0, 8)
-        .toUpperCase()}`;
-      try {
-        const admin = createAdminSupabaseClient();
-        const db = admin ?? supabase;
-        const { error: updateErr } = await db
-          .from("pass_instances")
-          .update({ serial: candidateSerial })
-          .eq("serial", claim.pass_serial);
-        if (!updateErr) {
-          effectiveSerial = candidateSerial;
-        }
-      } catch (err) {
-        console.warn("Could not format serial as PP-:", err);
-      }
-    }
-
     // Query business visual branding directly via admin client first so RLS never hides template_id/brand_color
     const biz = await fetchBusinessRowBySlug(db, supabase, data.slug);
+
+    // For brand-new passes, generate short 5-digit numeric pass code (PP-XXXXX) with 90k auto-scaling fallback
+    if (!isReturning) {
+      try {
+        let existingPassCount = 0;
+        if (biz?.id) {
+          const { count } = await db
+            .from("pass_instances")
+            .select("id", { count: "exact", head: true })
+            .eq("business_id", biz.id);
+          existingPassCount = count ?? 0;
+        }
+
+        let chosenSerial: string | null = null;
+        const forceSixDigits = existingPassCount >= 90_000;
+
+        // Try up to 12 attempts to generate a unique 5-digit PP-XXXXX code
+        for (let attempt = 0; attempt < 12; attempt++) {
+          const candidate = generateNumericPassCode(existingPassCount, forceSixDigits);
+          const { data: existing } = await db
+            .from("pass_instances")
+            .select("id")
+            .eq("serial", candidate)
+            .maybeSingle();
+
+          if (!existing) {
+            chosenSerial = candidate;
+            break;
+          }
+        }
+
+        // If all 12 5-digit attempts collided (or at 90k capacity), scale to 6 digits
+        if (!chosenSerial) {
+          for (let attempt = 0; attempt < 12; attempt++) {
+            const candidate = generateNumericPassCode(existingPassCount, true);
+            const { data: existing } = await db
+              .from("pass_instances")
+              .select("id")
+              .eq("serial", candidate)
+              .maybeSingle();
+
+            if (!existing) {
+              chosenSerial = candidate;
+              break;
+            }
+          }
+        }
+
+        if (chosenSerial) {
+          const { error: updateErr } = await db
+            .from("pass_instances")
+            .update({ serial: chosenSerial })
+            .eq("serial", claim.pass_serial);
+          if (!updateErr) {
+            effectiveSerial = chosenSerial;
+          }
+        }
+      } catch (err) {
+        console.warn("Could not generate 5-digit numeric pass code:", err);
+      }
+    }
 
     // Blend server & client-passed branding attributes (DB row always wins)
     const effectiveBrandColor = biz?.brand_color || data.brandColor || null;
@@ -1042,24 +1052,7 @@ export const updateWalletPass = createServerFn({ method: "POST" })
   });
 
 function normalizeScannedQuery(raw: string): string {
-  const trimmed = raw.trim();
-  try {
-    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-      const url = new URL(trimmed);
-      const fromParam = url.searchParams.get("serial") || url.searchParams.get("pass");
-      if (fromParam) return fromParam.trim();
-      const segments = url.pathname.split("/").filter(Boolean);
-      const last = segments[segments.length - 1];
-      if (last && (last.startsWith("PP-") || last.length > 5)) {
-        return last.trim();
-      }
-    }
-  } catch {
-    // not URL
-  }
-  const match = trimmed.match(/PP-[A-Za-z0-9_-]+/i);
-  if (match) return match[0];
-  return trimmed;
+  return normalizeCashierLookupQuery(raw).normalized;
 }
 
 const lookupCustomerSchema = z.object({
@@ -1076,9 +1069,7 @@ export const lookupCustomerPass = createServerFn({ method: "POST" })
   .validator((d: unknown) => lookupCustomerSchema.parse(d))
   .handler(async ({ data }) => {
     const supabase = createServerSupabaseClient();
-    const cleanQuery = normalizeScannedQuery(data.query);
-    const isPhone =
-      /^[0-9+() -]{6,20}$/.test(cleanQuery) && !cleanQuery.toUpperCase().startsWith("PP-");
+    const { normalized: cleanQuery, isPhone } = normalizeCashierLookupQuery(data.query);
 
     // 1. Try Service Role Admin Client if configured
     const admin = createAdminSupabaseClient();
@@ -1102,14 +1093,14 @@ export const lookupCustomerPass = createServerFn({ method: "POST" })
           .eq("businesses.slug", data.slug);
 
         if (isPhone) {
-          const normalized = normalizePhoneNumber(cleanQuery);
+          const normalized = normalizePhoneNumber(cleanQuery) || cleanQuery;
           const digitsOnly = cleanQuery.replace(/[^0-9]/g, "");
-          const orFilter = normalized
-            ? `phone.eq.${cleanQuery},phone.eq.${normalized},phone.ilike.%${digitsOnly.slice(-9)}%`
-            : `phone.eq.${cleanQuery},phone.ilike.%${digitsOnly.slice(-9)}%`;
+          const orFilter = `phone.eq.${cleanQuery},phone.eq.${normalized},phone.ilike.%${digitsOnly.slice(-9)}%`;
           passQuery = passQuery.or(orFilter);
         } else {
-          passQuery = passQuery.or(`serial.eq.${cleanQuery},wallet_serial.eq.${cleanQuery}`);
+          passQuery = passQuery.or(
+            `serial.eq.${cleanQuery},serial.ilike.${cleanQuery},serial.eq.${data.query.trim()},wallet_serial.eq.${cleanQuery}`,
+          );
         }
 
         const { data: passRow } = await passQuery.limit(1).maybeSingle();
