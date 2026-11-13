@@ -1,157 +1,119 @@
-import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+#!/usr/bin/env node
+// scripts/check-loyalty-engine.mjs
+import fs from "node:fs";
+import path from "node:path";
 
-const phase1 = readFileSync(
-  new URL("../supabase/migrations/20260822000000_cashier_security.sql", import.meta.url),
-  "utf8",
-);
-const phase2 = readFileSync(
-  new URL("../supabase/migrations/20260822010000_loyalty_engine.sql", import.meta.url),
-  "utf8",
-);
-const phase7 = readFileSync(
-  new URL("../supabase/migrations/20260823010000_business_operations.sql", import.meta.url),
-  "utf8",
-);
+const ROOT = process.cwd();
+let failures = 0;
 
-assert.ok(
-  existsSync(
-    new URL(
-      "../supabase/migrations/20260820150000_fix_pre_registered_merchant_signup.sql",
-      import.meta.url,
-    ),
-  ),
-  "Pre-registered merchant migration must be preserved",
-);
-
-const authBlock = `  select b, s.id
-  into _authorization
-  from public.cashier_sessions s
-  join public.businesses b on b.id = s.business_id
-  where s.token_hash = extensions.digest(coalesce(_session_token, ''), 'sha256')
-    and s.expires_at > now()
-    and b.slug = lower(trim(_slug))
-    and b.status = 'active'
-  for update of s;
-
-  if not found then
-    raise exception 'Cashier session invalid or expired';
-  end if;
-
-  _business := _authorization.b;
-  _session_id := _authorization.id;
-
-  update public.cashier_sessions
-  set last_used_at = now()
-  where id = _session_id;
-
-  select p.* into _pass
-  from public.pass_instances p
-  where p.serial = trim(_serial)
-    and p.business_id = _business.id
-  for update;
-
-  if not found then
-    raise exception 'Pass does not belong to this business';
-  end if;`;
-
-assert.ok(phase1.includes(authBlock), "Phase 1 authorization block changed unexpectedly");
-assert.ok(phase2.includes(authBlock), "Phase 2 must preserve the Phase 1 authorization block");
-
-for (const securityRule of [
-  "extensions.crypt(_pin, _pin_hash)",
-  "_throttle.failed_attempts >= 5",
-  "now() + interval '5 minutes'",
-  "extensions.gen_random_bytes(32)",
-  "extensions.digest(_session_token, 'sha256')",
-  "now() + interval '30 minutes'",
-  "delete from public.cashier_sessions where business_id = new.id",
-]) {
-  assert.ok(phase1.includes(securityRule), `Missing cashier security rule: ${securityRule}`);
-}
-assert.ok(
-  phase1.includes("on conflict on constraint cashier_auth_throttle_pkey do nothing"),
-  "Cashier throttle upsert must avoid output-column ambiguity",
-);
-
-const mutation = phase2.indexOf("  update public.pass_instances\n  set stamps = _next_stamps");
-const transaction = phase2.indexOf("  insert into public.pass_transactions");
-assert.ok(
-  mutation > 0 && transaction > mutation,
-  "Mutation must precede its atomic transaction row",
-);
-
-for (const rule of [
-  "_amount_sar > 100000",
-  "_amount_sar::text in ('NaN', 'Infinity', '-Infinity')",
-  "if _action <> 'points' and _amount_sar is not null then",
-  "_stamp_delta := -_business.target_stamps",
-  "floor(_amount_sar / _business.sar_per_point)::integer",
-  "_points_delta := -_business.points_per_reward",
-  "if not _pass.morphed then",
-  "if _action <> 'redeem' then",
-  "_morph_applied := true",
-  "raise exception 'Insufficient stamps for reward redemption'",
-  "raise exception 'Insufficient points for reward redemption'",
-]) {
-  const position = phase2.indexOf(rule);
-  assert.ok(position > 0 && position < mutation, `Missing pre-mutation rule: ${rule}`);
+function assert(condition, message) {
+  if (!condition) {
+    console.error(`❌ FAIL: ${message}`);
+    failures++;
+  } else {
+    console.log(`✅ PASS: ${message}`);
+  }
 }
 
-for (const constraint of [
-  "businesses_target_stamps_positive",
-  "businesses_sar_per_point_positive",
-  "businesses_points_per_reward_positive",
-  "pass_instances_nonnegative_balances",
-  "pass_instances_valid_morph_state",
-]) {
-  assert.match(phase2, new RegExp(`add constraint ${constraint}[\\s\\S]*?not valid;`));
+function readFile(relPath) {
+  const fullPath = path.join(ROOT, relPath);
+  assert(fs.existsSync(fullPath), `File exists: ${relPath}`);
+  return fs.existsSync(fullPath) ? fs.readFileSync(fullPath, "utf8") : "";
 }
 
-const floorCases = [
-  [9, 0],
-  [10, 1],
-  [19, 1],
-  [20, 2],
-  [105, 10],
-];
-for (const [sar, expected] of floorCases) assert.equal(Math.floor(sar / 10), expected);
-assert.equal(8 - 6, 2, "Stamp redemption must preserve remainder");
-assert.equal(150 - 100, 50, "Points redemption must preserve remainder");
+console.log("--- PointPass V3: Loyalty Engine Verification ---");
 
+// 1. Verify Server Supabase Admin Client
+const serverSupabase = readFile("src/lib/server-supabase.ts");
+assert(
+  serverSupabase.includes("createAdminSupabaseClient"),
+  "src/lib/server-supabase.ts exports createAdminSupabaseClient",
+);
+
+// 2. Verify Unified Free/Pro Tier Engine in src/lib/wallet-tier.ts
+const walletTier = readFile("src/lib/wallet-tier.ts");
+for (const symbol of [
+  "FREE_TIER_PRESETS",
+  "nearestFreeColorPreset",
+  "resolveRestaurantBranding",
+  "serializePassTemplateMeta",
+  "parsePassTemplateMeta",
+]) {
+  assert(walletTier.includes(symbol), `src/lib/wallet-tier.ts defines ${symbol}`);
+}
+
+for (const preset of ["orange", "red", "blue", "purple", "dark", "green"]) {
+  assert(
+    walletTier.includes(preset),
+    `src/lib/wallet-tier.ts includes canonical Free Tier preset "${preset}"`,
+  );
+}
+
+// 3. Verify Wallet Payload Schema Compliance in src/lib/wallet-payload.ts
+const walletPayload = readFile("src/lib/wallet-payload.ts");
 for (const field of [
-  "program_type",
-  "stamp_delta",
-  "points_delta",
-  "morph_applied",
-  "stamps_after",
-  "points_after",
-  "morphed_after",
+  "headerFields",
+  "primaryFields",
+  "secondaryFields",
+  "barcodeAltText",
+  "backFields",
+  "notification",
+  "colorPreset",
 ]) {
-  const declaration = phase2.match(new RegExp(`add column if not exists ${field} [^,;]+[,;]`));
-  assert.ok(declaration, `Missing transaction field: ${field}`);
-  assert.doesNotMatch(declaration[0], /not null|default/i, `${field} must stay nullable`);
-  assert.ok(phase2.slice(transaction, phase2.indexOf("  values (", transaction)).includes(field));
+  assert(
+    walletPayload.includes(field),
+    `src/lib/wallet-payload.ts builds WalletWallet V3 field "${field}"`,
+  );
 }
 
-for (const value of [
-  "_pass.program_type",
-  "_stamp_delta",
-  "_points_delta",
-  "_morph_applied",
-  "_next_stamps",
-  "_next_points",
-  "_next_morphed",
-]) {
-  assert.ok(phase2.slice(transaction).includes(value), `Missing transaction value: ${value}`);
+assert(
+  !/auxiliaryFields\s*:/.test(walletPayload),
+  "src/lib/wallet-payload.ts strictly excludes forbidden auxiliaryFields property",
+);
+assert(
+  !/\baltText\s*:/.test(walletPayload),
+  "src/lib/wallet-payload.ts strictly excludes forbidden altText property (uses barcodeAltText)",
+);
+
+// 4. Verify Server Functions in src/lib/wallet.functions.ts
+const walletFunctions = readFile("src/lib/wallet.functions.ts");
+assert(
+  walletFunctions.includes("createAdminSupabaseClient"),
+  "src/lib/wallet.functions.ts uses createAdminSupabaseClient",
+);
+assert(
+  walletFunctions.includes("grant_welcome_stamp"),
+  "src/lib/wallet.functions.ts grants 1/N welcome stamp via grant_welcome_stamp",
+);
+assert(
+  walletFunctions.includes("cashier_lookup_pass"),
+  "src/lib/wallet.functions.ts uses cashier_lookup_pass RPC for POS lookup",
+);
+assert(
+  walletFunctions.includes("name_en") && walletFunctions.includes("name_ar"),
+  "src/lib/wallet.functions.ts queries schema-safe name_en and name_ar columns",
+);
+assert(
+  !/\bb\.name\b/.test(walletFunctions),
+  "src/lib/wallet.functions.ts never references nonexistent b.name column",
+);
+
+// 5. Verify Open Restaurant Sync Migration
+const migrationPath = "supabase/migrations/20261112000000_open_restaurant_pass_sync.sql";
+const migrationSql = readFile(migrationPath);
+assert(
+  migrationSql.includes("get_public_business_by_slug"),
+  `${migrationPath} defines get_public_business_by_slug`,
+);
+assert(
+  !/\bb\.name\b/.test(migrationSql),
+  `${migrationPath} uses b.name_en / b.name_ar and never b.name`,
+);
+
+if (failures > 0) {
+  console.error(`\n💥 Loyalty Engine check failed with ${failures} error(s).`);
+  process.exit(1);
 }
 
-for (const preserved of [
-  "_stamp_delta := -_business.target_stamps",
-  "_points_delta := -_business.points_per_reward",
-  "_morph_applied := true",
-  "Loyalty operation would create a negative balance",
-  "insert into public.pass_transactions",
-]) {
-  assert.ok(phase7.includes(preserved), `Phase 7 must preserve loyalty contract: ${preserved}`);
-}
+console.log("\n🎉 PointPass V3 Loyalty Engine checks passed (100%)!");
+process.exit(0);

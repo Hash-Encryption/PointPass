@@ -2,6 +2,13 @@ export type WalletTierMode = "free" | "pro";
 export type StripStyle = "pizzatown" | "nails_white" | "linear_dark";
 export type WalletColorPreset = "dark" | "blue" | "green" | "red" | "purple" | "orange";
 
+export type FreeColorPresetKey = WalletColorPreset;
+export type PassTierMode = WalletTierMode;
+export type StampIconKey = string;
+export type StripStyleKey = StripStyle;
+
+export const STAMP_ICONS = ["⭐", "☕", "🍔", "🥐", "✂️", "🚗", "🎁"] as const;
+
 export interface PassTemplateMeta {
   baseId: string;
   stampIcon: string;
@@ -172,24 +179,60 @@ export function emojiToIcon(emojiOrText?: string | null): string {
   return "star";
 }
 
-export function serializePassTemplateMeta(params: {
-  baseId?: string | null | undefined;
-  stampIcon?: string | null | undefined;
-  stripStyle?: StripStyle | null | undefined;
+export interface SerializePassTemplateOptions {
   colorPreset?: WalletColorPreset | null | undefined;
   tierMode?: WalletTierMode | null | undefined;
   brandColor?: string | null | undefined;
-}): string {
-  const base = params.baseId?.trim() || "blank";
-  const icon = emojiToIcon(params.stampIcon || "star");
-  const style: StripStyle = params.stripStyle || "pizzatown";
-  const tier: WalletTierMode = params.tierMode === "pro" ? "pro" : "free";
+}
+
+export function serializePassTemplateMeta(
+  baseIdOrParams?:
+    | string
+    | {
+        baseId?: string | null | undefined;
+        stampIcon?: string | null | undefined;
+        stripStyle?: StripStyle | null | undefined;
+        colorPreset?: WalletColorPreset | null | undefined;
+        tierMode?: WalletTierMode | null | undefined;
+        brandColor?: string | null | undefined;
+      }
+    | null,
+  stampIcon?: string | null | undefined,
+  stripStyle?: StripStyle | null | undefined,
+  options?: SerializePassTemplateOptions,
+): string {
+  let base = "blank";
+  let iconRaw: string | null | undefined;
+  let styleRaw: StripStyle | null | undefined;
+  let presetRaw: WalletColorPreset | null | undefined;
+  let tierRaw: WalletTierMode | null | undefined;
+  let brandColorRaw: string | null | undefined;
+
+  if (typeof baseIdOrParams === "object" && baseIdOrParams !== null) {
+    base = baseIdOrParams.baseId?.trim() || "blank";
+    iconRaw = baseIdOrParams.stampIcon;
+    styleRaw = baseIdOrParams.stripStyle;
+    presetRaw = baseIdOrParams.colorPreset;
+    tierRaw = baseIdOrParams.tierMode;
+    brandColorRaw = baseIdOrParams.brandColor;
+  } else {
+    base =
+      typeof baseIdOrParams === "string" && baseIdOrParams.trim() ? baseIdOrParams.trim() : "blank";
+    iconRaw = stampIcon;
+    styleRaw = stripStyle;
+    presetRaw = options?.colorPreset;
+    tierRaw = options?.tierMode;
+    brandColorRaw = options?.brandColor;
+  }
+
+  const icon = emojiToIcon(iconRaw || "star");
+  const style: StripStyle = styleRaw || "pizzatown";
+  const tier: WalletTierMode = tierRaw === "pro" ? "pro" : "free";
   // In Pro mode, always sync the Free Tier backup colorPreset from brandColor via nearestFreeColorPreset
   const preset: WalletColorPreset =
-    tier === "pro" && params.brandColor
-      ? nearestFreeColorPreset(params.brandColor)
-      : params.colorPreset ||
-        (params.brandColor ? nearestFreeColorPreset(params.brandColor) : "dark");
+    tier === "pro" && brandColorRaw
+      ? nearestFreeColorPreset(brandColorRaw)
+      : presetRaw || (brandColorRaw ? nearestFreeColorPreset(brandColorRaw) : "dark");
 
   return `${base}__icon-${icon}__style-${style}__preset-${preset}__tier-${tier}`;
 }

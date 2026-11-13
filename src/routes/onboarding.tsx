@@ -12,8 +12,82 @@ import { BusinessSetupStep } from "@/components/onboarding/BusinessSetupStep";
 import { LoyaltySetupStep } from "@/components/onboarding/LoyaltySetupStep";
 import { RewardSetupStep } from "@/components/onboarding/RewardSetupStep";
 import { LaunchStep } from "@/components/onboarding/LaunchStep";
+// Modular onboarding architecture: BusinessSetupStep, PlanSelectionStep, LoyaltySetupStep, RewardSetupStep, MainLocationStep, LaunchStep
 import { type ProgramType } from "@/constants/defaultTemplates";
-import { parsePassTemplateMeta } from "@/lib/wallet-tier";
+import {
+  FREE_TIER_PRESETS,
+  nearestFreeColorPreset,
+  parsePassTemplateMeta,
+  serializePassTemplateMeta,
+  type FreeColorPresetKey,
+  type PassTierMode,
+  type StampIconKey,
+  type StripStyleKey,
+} from "@/lib/wallet-tier";
+
+export interface V3LoyaltySetupValues {
+  businessNameEn: string;
+  businessNameAr: string;
+  stampsRequired: number;
+  rewardNameEn: string;
+  rewardNameAr: string;
+  stampIcon: StampIconKey;
+  stripStyle: StripStyleKey;
+  colorPreset: FreeColorPresetKey;
+  tierMode: PassTierMode;
+  brandColor: string;
+  baseTemplateId: string;
+}
+
+export function buildV3BusinessPayload(
+  userId: string,
+  normalizedSlug: string,
+  loyaltyValues: V3LoyaltySetupValues,
+  phone = "",
+  cashierPin = "1234",
+) {
+  const resolvedColorPreset: FreeColorPresetKey =
+    loyaltyValues.tierMode === "free"
+      ? loyaltyValues.colorPreset
+      : nearestFreeColorPreset(loyaltyValues.brandColor);
+
+  const resolvedBrandColor =
+    loyaltyValues.tierMode === "free"
+      ? FREE_TIER_PRESETS[resolvedColorPreset]
+      : loyaltyValues.brandColor || FREE_TIER_PRESETS[resolvedColorPreset];
+
+  const serializedTemplateId = serializePassTemplateMeta(
+    loyaltyValues.baseTemplateId || "default",
+    loyaltyValues.stampIcon,
+    loyaltyValues.stripStyle,
+    {
+      colorPreset: resolvedColorPreset,
+      tierMode: loyaltyValues.tierMode,
+      brandColor: resolvedBrandColor,
+    },
+  );
+
+  const cleanNameEn =
+    loyaltyValues.businessNameEn.trim() ||
+    loyaltyValues.businessNameAr.trim() ||
+    "PointPass Merchant";
+  const cleanNameAr = loyaltyValues.businessNameAr.trim() || cleanNameEn;
+
+  // IMPORTANT: Only use name_en and name_ar (NEVER name) on public.businesses
+  return {
+    owner_id: userId,
+    slug: normalizedSlug,
+    name_en: cleanNameEn,
+    name_ar: cleanNameAr,
+    phone: phone.trim() || null,
+    cashier_pin: /^\d{4}$/.test(cashierPin.trim()) ? cashierPin.trim() : "1234",
+    stamps_required: loyaltyValues.stampsRequired,
+    reward_name_en: loyaltyValues.rewardNameEn.trim() || "Free Coffee",
+    reward_name_ar: loyaltyValues.rewardNameAr.trim() || "قهوة مجانية",
+    brand_color: resolvedBrandColor,
+    template_id: serializedTemplateId,
+  };
+}
 
 export const Route = createFileRoute("/onboarding")({
   head: () => ({
