@@ -140,7 +140,9 @@ export const STRIP_STYLES: Array<{
 export const ICON_EMOJI_MAP: Record<string, string> = {
   coffee: "☕",
   burger: "🍔",
+  croissant: "🥐",
   bakery: "🥐",
+  scissors: "✂️",
   salon: "✂️",
   car: "🚗",
   carwash: "🚗",
@@ -158,6 +160,80 @@ export const EMOJI_ICON_MAP: Record<string, string> = {
   "⭐": "star",
 };
 
+export interface CanonicalIconReward {
+  en: string;
+  ar: string;
+}
+
+export type CanonicalStampIconKey =
+  | "coffee"
+  | "burger"
+  | "croissant"
+  | "bakery"
+  | "scissors"
+  | "salon"
+  | "car"
+  | "carwash"
+  | "star"
+  | "gift";
+
+export const STAMP_ICON_DEFAULT_REWARDS: Record<CanonicalStampIconKey, CanonicalIconReward> = {
+  coffee: { en: "Free Specialty Coffee ☕", ar: "قهوة مختصة مجانية ☕" },
+  burger: { en: "Free Classic Burger 🍔", ar: "برجر كلاسيك مجاني 🍔" },
+  croissant: { en: "Free Fresh Pastry 🥐", ar: "مخبوزات طازجة مجانية 🥐" },
+  bakery: { en: "Free Fresh Pastry 🥐", ar: "مخبوزات طازجة مجانية 🥐" },
+  scissors: { en: "Free Haircut & Styling ✂️", ar: "حلاقة وتصفيف مجاني ✂️" },
+  salon: { en: "Free Haircut & Styling ✂️", ar: "حلاقة وتصفيف مجاني ✂️" },
+  car: { en: "Free Full Car Wash 🚗", ar: "غسيل سيارة مجاني شامل 🚗" },
+  carwash: { en: "Free Full Car Wash 🚗", ar: "غسيل سيارة مجاني شامل 🚗" },
+  star: { en: "Free VIP Reward ⭐", ar: "مكافأة VIP مجانية ⭐" },
+  gift: { en: "Free VIP Reward ⭐", ar: "مكافأة VIP مجانية ⭐" },
+};
+
+const LEGACY_DEFAULT_REWARD_STRINGS = new Set<string>([
+  "free coffee",
+  "قهوة مجانية",
+  "special reward after 8 visits 🎁",
+  "مكافأة خاصة بعد 8 زيارات 🎁",
+  "free handcrafted coffee ☕",
+  "قهوة مجانية من اختيارك ☕",
+  "free burger meal of your choice 🍔",
+  "وجبة برجر مجانية من اختيارك 🍔",
+  "free pastry or dessert box 🥐",
+  "قطعة حلى أو مخبوزات مجانية 🥐",
+  "free grooming or beauty session ✂️",
+  "جلسة عناية أو حلاقة مجانية ✂️",
+  "free complete car wash 🚗",
+  "غسيل سيارة مجاني شامل 🚗",
+  "special reward upon card completion 🎁",
+  "مكافأة خاصة بعد إكمال الأختام 🎁",
+]);
+
+export function getDefaultRewardForStampIcon(stampIcon?: StampIconKey | null): CanonicalIconReward {
+  const key = emojiToIcon(stampIcon) as CanonicalStampIconKey;
+  return STAMP_ICON_DEFAULT_REWARDS[key] ?? STAMP_ICON_DEFAULT_REWARDS.star;
+}
+
+export function isCanonicalDefaultReward(
+  offerEn?: string | null,
+  offerAr?: string | null,
+): boolean {
+  const cleanEn = (offerEn ?? "").trim();
+  const cleanAr = (offerAr ?? "").trim();
+  if (!cleanEn && !cleanAr) return true;
+
+  const isDefaultText = (value: string): boolean => {
+    if (!value) return true;
+    const lower = value.toLowerCase();
+    if (LEGACY_DEFAULT_REWARD_STRINGS.has(lower)) return true;
+    return Object.values(STAMP_ICON_DEFAULT_REWARDS).some(
+      (reward) => reward.en.toLowerCase() === lower || reward.ar.toLowerCase() === lower,
+    );
+  };
+
+  return isDefaultText(cleanEn) && isDefaultText(cleanAr);
+}
+
 export function iconToEmoji(iconKey?: string | null): string {
   if (!iconKey) return "⭐";
   const clean = iconKey.trim().toLowerCase();
@@ -169,11 +245,18 @@ export function emojiToIcon(emojiOrText?: string | null): string {
   const clean = emojiOrText.trim();
   if (EMOJI_ICON_MAP[clean]) return EMOJI_ICON_MAP[clean]!;
   const lower = clean.toLowerCase();
-  if (ICON_EMOJI_MAP[lower]) return lower;
+  if (ICON_EMOJI_MAP[lower]) {
+    if (lower === "croissant") return "bakery";
+    if (lower === "scissors") return "salon";
+    if (lower === "carwash") return "car";
+    return lower;
+  }
   if (lower.includes("coffee") || lower.includes("cafe")) return "coffee";
   if (lower.includes("burger") || lower.includes("bistro")) return "burger";
-  if (lower.includes("bakery") || lower.includes("sweet")) return "bakery";
-  if (lower.includes("salon") || lower.includes("barber")) return "salon";
+  if (lower.includes("croissant") || lower.includes("bakery") || lower.includes("sweet"))
+    return "bakery";
+  if (lower.includes("scissor") || lower.includes("salon") || lower.includes("barber"))
+    return "salon";
   if (lower.includes("car")) return "car";
   if (lower.includes("gift")) return "gift";
   return "star";

@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { createServerSupabaseClient } from "@/lib/server-supabase";
+import { createAdminSupabaseClient, createServerSupabaseClient } from "@/lib/server-supabase";
+export { saveOnboardingProgressServerFn } from "@/lib/wallet.functions";
 
 const bootstrapSchema = z.object({
   accessToken: z.string().min(20),
@@ -93,45 +94,63 @@ export const saveOnboardingStepFn = createServerFn({ method: "POST" })
       throw new Error("Authentication required");
     }
 
-    const { data: rpcData, error: rpcError } = await serverClient.rpc("save_onboarding_step", {
-      _business_id: data.businessId,
-      _step: data.step,
-      _requested_plan: data.requestedPlan || null,
-      _program_type: data.programType || null,
-      _brand_color: data.brandColor || null,
-      _accent_color: data.accentColor || null,
-      _offer_ar: data.offerAr || null,
-      _offer_en: data.offerEn || null,
-      _target_stamps: data.targetStamps || null,
-      _sar_per_point: data.sarPerPoint || null,
-      _points_per_reward: data.pointsPerReward || null,
-      _main_branch_name_ar: data.mainBranchNameAr || null,
-      _main_branch_name_en: data.mainBranchNameEn || null,
-      _main_branch_address_ar: data.mainBranchAddressAr || null,
-      _main_branch_address_en: data.mainBranchAddressEn || null,
-    });
+    const db = createAdminSupabaseClient() ?? serverClient;
+    const { data: biz, error: bizErr } = await db
+      .from("businesses")
+      .select("id,owner_id,merchant_email")
+      .eq("id", data.businessId)
+      .maybeSingle();
 
-    if (rpcError) {
-      throw new Error(rpcError.message);
+    if (bizErr || !biz) {
+      throw new Error("Business not found");
     }
 
-    if (data.templateId || data.offerAr || data.offerEn) {
-      try {
-        const updates: Record<string, unknown> = {};
-        if (data.templateId) updates["template_id"] = data.templateId;
-        if (data.offerAr) updates["offer_ar"] = data.offerAr;
-        if (data.offerEn) updates["offer_en"] = data.offerEn;
-        if (Object.keys(updates).length > 0) {
-          await serverClient.from("businesses").update(updates).eq("id", data.businessId);
-        }
-      } catch (updateErr) {
-        console.warn("Direct business fields update notice:", updateErr);
-      }
+    const isOwner =
+      biz.owner_id === user.id ||
+      Boolean(
+        biz.merchant_email &&
+        user.email &&
+        biz.merchant_email.toLowerCase() === user.email.toLowerCase(),
+      );
+
+    if (!isOwner) {
+      throw new Error("Forbidden: you do not own this business");
     }
+
+    const nowIso = new Date().toISOString();
+    const updates: Record<string, unknown> = {};
+    if (data.programType) updates["program_type"] = data.programType;
+    if (data.brandColor) updates["brand_color"] = data.brandColor;
+    if (data.accentColor) updates["accent_color"] = data.accentColor;
+    if (data.offerAr !== undefined) updates["offer_ar"] = data.offerAr;
+    if (data.offerEn !== undefined) updates["offer_en"] = data.offerEn;
+    if (data.targetStamps !== undefined) updates["target_stamps"] = data.targetStamps;
+    if (data.sarPerPoint !== undefined) updates["sar_per_point"] = data.sarPerPoint;
+    if (data.pointsPerReward !== undefined) updates["points_per_reward"] = data.pointsPerReward;
+    if (data.templateId) updates["template_id"] = data.templateId;
+
+    if (Object.keys(updates).length > 0) {
+      const { error: updateErr } = await db
+        .from("businesses")
+        .update(updates)
+        .eq("id", data.businessId);
+      if (updateErr) throw new Error(updateErr.message);
+    }
+
+    const { error: onbErr } = await db.from("business_onboarding").upsert(
+      {
+        business_id: data.businessId,
+        step: data.step,
+        completed: false,
+        updated_at: nowIso,
+      },
+      { onConflict: "business_id" },
+    );
+    if (onbErr) throw new Error(onbErr.message);
 
     return {
       ok: true as const,
-      data: rpcData,
+      data: [{ step: data.step, completed: false }],
     };
   });
 
@@ -153,13 +172,41 @@ export const completeOnboardingFn = createServerFn({ method: "POST" })
       throw new Error("Authentication required");
     }
 
-    const { error: rpcError } = await serverClient.rpc("complete_onboarding", {
-      _business_id: data.businessId,
-    });
+    const db = createAdminSupabaseClient() ?? serverClient;
+    const { data: biz, error: bizErr } = await db
+      .from("businesses")
+      .select("id,owner_id,merchant_email")
+      .eq("id", data.businessId)
+      .maybeSingle();
 
-    if (rpcError) {
-      throw new Error(rpcError.message);
+    if (bizErr || !biz) {
+      throw new Error("Business not found");
     }
+
+    const isOwner =
+      biz.owner_id === user.id ||
+      Boolean(
+        biz.merchant_email &&
+        user.email &&
+        biz.merchant_email.toLowerCase() === user.email.toLowerCase(),
+      );
+
+    if (!isOwner) {
+      throw new Error("Forbidden: you do not own this business");
+    }
+
+    const nowIso = new Date().toISOString();
+    const { error: onbErr } = await db.from("business_onboarding").upsert(
+      {
+        business_id: data.businessId,
+        step: "completed",
+        completed: true,
+        completed_at: nowIso,
+        updated_at: nowIso,
+      },
+      { onConflict: "business_id" },
+    );
+    if (onbErr) throw new Error(onbErr.message);
 
     return {
       ok: true as const,

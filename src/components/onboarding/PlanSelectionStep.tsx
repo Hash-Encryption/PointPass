@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useLocale } from "@/lib/i18n";
 import { AVAILABLE_PLANS, CanonicalPlanCode, resolveCanonicalPlan } from "@/lib/plans";
-import { saveOnboardingStepFn } from "@/lib/onboarding.functions";
+import { saveOnboardingProgressServerFn } from "@/lib/wallet.functions";
 import { supabase } from "@/lib/supabase";
 
 interface PlanSelectionStepProps {
@@ -43,7 +43,7 @@ export function PlanSelectionStep({
         );
       }
 
-      await saveOnboardingStepFn({
+      await saveOnboardingProgressServerFn({
         data: {
           accessToken: session.access_token,
           businessId,

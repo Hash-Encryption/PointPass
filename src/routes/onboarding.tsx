@@ -14,11 +14,15 @@ import { RewardSetupStep } from "@/components/onboarding/RewardSetupStep";
 import { LaunchStep } from "@/components/onboarding/LaunchStep";
 // Modular onboarding architecture: BusinessSetupStep, PlanSelectionStep, LoyaltySetupStep, RewardSetupStep, MainLocationStep, LaunchStep
 import { type ProgramType } from "@/constants/defaultTemplates";
+import { saveOnboardingProgressServerFn } from "@/lib/wallet.functions";
 import {
   FREE_TIER_PRESETS,
+  getDefaultRewardForStampIcon,
+  iconToEmoji,
   nearestFreeColorPreset,
   parsePassTemplateMeta,
   serializePassTemplateMeta,
+  STAMP_ICON_DEFAULT_REWARDS,
   type FreeColorPresetKey,
   type PassTierMode,
   type StampIconKey,
@@ -72,8 +76,9 @@ export function buildV3BusinessPayload(
     loyaltyValues.businessNameAr.trim() ||
     "PointPass Merchant";
   const cleanNameAr = loyaltyValues.businessNameAr.trim() || cleanNameEn;
+  const iconDefaultReward = getDefaultRewardForStampIcon(loyaltyValues.stampIcon);
 
-  // IMPORTANT: Only use name_en and name_ar (NEVER name) on public.businesses
+  // IMPORTANT: Only use schema-valid columns on public.businesses (name_en, name_ar, target_stamps, offer_en, offer_ar)
   return {
     owner_id: userId,
     slug: normalizedSlug,
@@ -81,9 +86,9 @@ export function buildV3BusinessPayload(
     name_ar: cleanNameAr,
     phone: phone.trim() || null,
     cashier_pin: /^\d{4}$/.test(cashierPin.trim()) ? cashierPin.trim() : "1234",
-    stamps_required: loyaltyValues.stampsRequired,
-    reward_name_en: loyaltyValues.rewardNameEn.trim() || "Free Coffee",
-    reward_name_ar: loyaltyValues.rewardNameAr.trim() || "قهوة مجانية",
+    target_stamps: loyaltyValues.stampsRequired,
+    offer_en: loyaltyValues.rewardNameEn.trim() || iconDefaultReward.en,
+    offer_ar: loyaltyValues.rewardNameAr.trim() || iconDefaultReward.ar,
     brand_color: resolvedBrandColor,
     template_id: serializedTemplateId,
   };
@@ -188,6 +193,7 @@ function OnboardingRoute() {
           .select(
             "id,slug,name_ar,name_en,plan,program_type,offer_ar,offer_en,brand_color,accent_color,target_stamps,sar_per_point,points_per_reward,template_id",
           )
+          .eq("owner_id", user!.id)
           .order("created_at", { ascending: false })
           .limit(1);
 
@@ -201,8 +207,8 @@ function OnboardingRoute() {
 
         if (biz.template_id) {
           try {
-            const meta = parsePassTemplateMeta(biz.template_id);
-            biz.stamp_icon = meta.stampIcon;
+            const meta = parsePassTemplateMeta(biz.template_id, biz.brand_color);
+            biz.stamp_icon = iconToEmoji(meta.stampIcon);
           } catch {
             // Safe fallback if format differs
           }
@@ -334,28 +340,60 @@ function OnboardingRoute() {
     );
   }
 
+  async function handleStepBack(targetStep: OnboardingStepKey) {
+    setCurrentStep(targetStep);
+    if (!createdBusiness?.id) return;
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session) return;
+      await saveOnboardingProgressServerFn({
+        data: {
+          accessToken: session.access_token,
+          businessId: createdBusiness.id,
+          step: targetStep,
+        },
+      });
+    } catch (err) {
+      console.warn("Onboarding step back sync note:", err);
+    }
+  }
+
   return (
     <OnboardingLayout currentStep={currentStep}>
       {/* Step 1: Business Identity */}
       {currentStep === "business" && (
         <BusinessSetupStep
+          initialBusiness={createdBusiness}
           onSuccess={(biz) => {
-            setCreatedBusiness({
-              id: biz.business_id,
-              slug: biz.slug,
-              name_ar: biz.name_ar,
-              name_en: biz.name_en,
-              plan: biz.effective_plan,
-              program_type: "stamp",
-              offer_ar: "مكافأة خاصة بعد 8 زيارات 🎁",
-              offer_en: "Special reward after 8 visits 🎁",
-              brand_color: "#121214",
-              accent_color: "#10B981",
-              target_stamps: 8,
-              sar_per_point: 10,
-              points_per_reward: 100,
-              stamp_icon: "⭐",
-            });
+            const defaultStarReward = STAMP_ICON_DEFAULT_REWARDS.star!;
+            setCreatedBusiness((prev) =>
+              prev && prev.id === biz.business_id
+                ? {
+                    ...prev,
+                    slug: biz.slug,
+                    name_ar: biz.name_ar,
+                    name_en: biz.name_en,
+                    plan: biz.effective_plan,
+                  }
+                : {
+                    id: biz.business_id,
+                    slug: biz.slug,
+                    name_ar: biz.name_ar,
+                    name_en: biz.name_en,
+                    plan: biz.effective_plan,
+                    program_type: "stamp",
+                    offer_ar: defaultStarReward.ar,
+                    offer_en: defaultStarReward.en,
+                    brand_color: "#121214",
+                    accent_color: "#10B981",
+                    target_stamps: 8,
+                    sar_per_point: 10,
+                    points_per_reward: 100,
+                    stamp_icon: "⭐",
+                  },
+            );
             // Advance straight to loyalty (skipping manual plan screen)
             setCurrentStep("loyalty");
           }}
@@ -373,6 +411,9 @@ function OnboardingRoute() {
           initialAccentColor={createdBusiness.accent_color}
           initialTargetStamps={createdBusiness.target_stamps ?? 8}
           initialStampIcon={createdBusiness.stamp_icon ?? "⭐"}
+          initialOfferAr={createdBusiness.offer_ar}
+          initialOfferEn={createdBusiness.offer_en}
+          initialTemplateId={createdBusiness.template_id ?? null}
           onSuccess={(config) => {
             setCreatedBusiness((prev) =>
               prev
@@ -381,17 +422,18 @@ function OnboardingRoute() {
                     program_type: config.program,
                     brand_color: config.brandColor,
                     accent_color: config.accentColor,
-                    targetStamps: config.targetStamps,
+                    target_stamps: config.targetStamps,
                     stamp_icon: config.stampIcon,
                     offer_ar: config.suggestedRewardAr,
                     offer_en: config.suggestedRewardEn,
+                    template_id: config.templateId,
                   }
                 : null,
             );
             // Advance straight to reward
             setCurrentStep("reward");
           }}
-          onBack={() => setCurrentStep("business")}
+          onBack={() => void handleStepBack("business")}
         />
       )}
 
@@ -422,7 +464,7 @@ function OnboardingRoute() {
             // Advancing from reward progresses directly to launch (skipping location step)
             setCurrentStep("launch");
           }}
-          onBack={() => setCurrentStep("loyalty")}
+          onBack={() => void handleStepBack("loyalty")}
         />
       )}
 
@@ -433,7 +475,7 @@ function OnboardingRoute() {
           onFinish={() => {
             void navigate({ to: "/dashboard", replace: true });
           }}
-          onBack={() => setCurrentStep("reward")}
+          onBack={() => void handleStepBack("reward")}
         />
       )}
     </OnboardingLayout>

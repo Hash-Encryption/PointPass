@@ -16,6 +16,7 @@ import {
   normalizePhoneNumber as normalizeCustomerPhoneTier,
   parsePassTemplateMeta,
   resolveRestaurantBranding,
+  serializePassTemplateMeta,
 } from "@/lib/wallet-tier";
 import { generateStampStripDataUri } from "@/lib/strip-generator";
 import { captureAppError } from "@/lib/observability";
@@ -1404,13 +1405,14 @@ export const sendWalletPush = createServerFn({ method: "POST" })
     const { data: business, error: businessError } = await supabase
       .from("businesses")
       .select(
-        "id,name_ar,name_en,offer_en,target_stamps,brand_color,accent_color,logo_url,offer_ar,custom_domain,template_id",
+        "id,owner_id,name_ar,name_en,offer_en,target_stamps,brand_color,accent_color,logo_url,offer_ar,custom_domain,template_id",
       )
       .eq("id", data.businessId)
       .eq("slug", data.slug)
+      .eq("owner_id", user.id)
       .maybeSingle();
 
-    if (businessError || !business) {
+    if (businessError || !business || business.owner_id !== user.id) {
       throw new Error("You cannot send campaigns for this business");
     }
 
@@ -1529,5 +1531,264 @@ export const sendWalletPush = createServerFn({ method: "POST" })
     return {
       ok: failed === 0,
       error: failed ? `${failed} wallet update${failed === 1 ? "" : "s"} failed` : null,
+    };
+  });
+
+const saveOnboardingProgressSchema = z.object({
+  accessToken: z.string().min(20),
+  businessId: z.string().uuid().optional(),
+  step: z.enum(["business", "plan", "loyalty", "reward", "location", "launch", "completed"]),
+  completed: z.boolean().optional(),
+  slug: z
+    .string()
+    .min(2)
+    .max(64)
+    .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+    .optional(),
+  nameEn: z.string().trim().min(1).max(120).optional(),
+  nameAr: z.string().trim().min(1).max(120).optional(),
+  programType: z.enum(["stamp", "points", "coupon_morph"]).optional(),
+  brandColor: z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/)
+    .optional(),
+  accentColor: z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/)
+    .optional(),
+  templateId: z.string().max(250).optional(),
+  baseTemplateId: z.string().max(80).optional(),
+  stampIcon: z.string().max(32).optional(),
+  stripStyle: z.enum(["pizzatown", "nails_white", "linear_dark"]).optional(),
+  colorPreset: z.enum(["dark", "blue", "green", "red", "purple", "orange"]).optional(),
+  tierMode: z.enum(["free", "pro"]).optional(),
+  targetStamps: z.number().int().positive().max(30).optional(),
+  offerEn: z.string().max(250).optional(),
+  offerAr: z.string().max(250).optional(),
+  sarPerPoint: z.number().int().positive().optional(),
+  pointsPerReward: z.number().int().positive().optional(),
+  requestedPlan: z.string().max(64).optional(),
+  mainBranchNameAr: z.string().max(120).optional(),
+  mainBranchNameEn: z.string().max(120).optional(),
+  mainBranchAddressAr: z.string().max(250).optional(),
+  mainBranchAddressEn: z.string().max(250).optional(),
+});
+
+export const saveOnboardingProgressServerFn = createServerFn({ method: "POST" })
+  .validator((d: unknown) => saveOnboardingProgressSchema.parse(d))
+  .handler(async ({ data }) => {
+    const userClient = createServerSupabaseClient(data.accessToken);
+    const {
+      data: { user },
+      error: authError,
+    } = await userClient.auth.getUser(data.accessToken);
+
+    if (authError || !user) {
+      throw new Error("Authentication required");
+    }
+
+    const admin = createAdminSupabaseClient();
+    const db = admin ?? userClient;
+    const nowIso = new Date().toISOString();
+
+    let targetBusinessId = data.businessId;
+    let allowCrossOwnerUpdate = false;
+
+    if (targetBusinessId) {
+      const { data: existing, error: lookupError } = await db
+        .from("businesses")
+        .select("id,owner_id,merchant_email")
+        .eq("id", targetBusinessId)
+        .maybeSingle();
+
+      if (lookupError || !existing) {
+        throw new Error("Business not found");
+      }
+
+      const ownerMatches = existing.owner_id === user.id;
+      const emailMatches = Boolean(
+        existing.merchant_email &&
+        user.email &&
+        existing.merchant_email.toLowerCase() === user.email.toLowerCase(),
+      );
+
+      let hasRoleAccess = false;
+      if (!ownerMatches && !emailMatches) {
+        const { data: roles } = await db
+          .from("user_roles")
+          .select("role,business_id")
+          .eq("user_id", user.id)
+          .in("role", ["super_admin", "merchant"]);
+
+        for (const r of roles ?? []) {
+          if (r.role === "super_admin") {
+            allowCrossOwnerUpdate = true;
+            hasRoleAccess = true;
+            break;
+          }
+          if (r.role === "merchant" && r.business_id === targetBusinessId) {
+            allowCrossOwnerUpdate = true;
+            hasRoleAccess = true;
+          }
+        }
+      }
+
+      if (!ownerMatches && !emailMatches && !hasRoleAccess) {
+        throw new Error("Forbidden: you do not have permission to update this business");
+      }
+
+      if (emailMatches && !existing.owner_id) {
+        await db.from("businesses").update({ owner_id: user.id }).eq("id", targetBusinessId);
+      }
+    } else {
+      if (!data.slug || (!data.nameEn && !data.nameAr)) {
+        throw new Error("Business ID or initial store identity is required");
+      }
+
+      const cleanSlug = data.slug.toLowerCase().trim();
+      const cleanNameEn = (data.nameEn ?? data.nameAr ?? "").trim();
+      const cleanNameAr = (data.nameAr ?? data.nameEn ?? "").trim();
+
+      const { data: created, error: insertError } = await db
+        .from("businesses")
+        .insert({
+          owner_id: user.id,
+          slug: cleanSlug,
+          name_en: cleanNameEn,
+          name_ar: cleanNameAr,
+          plan: "single_location",
+          status: "active",
+        })
+        .select("id")
+        .single();
+
+      if (insertError || !created) {
+        throw new Error(insertError?.message ?? "Could not create business");
+      }
+
+      targetBusinessId = created.id as string;
+
+      await db
+        .from("user_roles")
+        .upsert(
+          { user_id: user.id, role: "merchant", business_id: targetBusinessId },
+          { onConflict: "user_id,role,business_id", ignoreDuplicates: true },
+        );
+
+      await db.from("business_subscriptions").upsert(
+        {
+          business_id: targetBusinessId,
+          plan_code: "single_location",
+          requested_plan_code: "single_location",
+          status: "pending",
+          updated_at: nowIso,
+        },
+        { onConflict: "business_id" },
+      );
+    }
+
+    const resolvedTemplateId =
+      data.templateId ??
+      (data.stampIcon || data.stripStyle || data.colorPreset || data.tierMode
+        ? serializePassTemplateMeta({
+            baseId: data.baseTemplateId ?? "blank",
+            stampIcon: data.stampIcon,
+            stripStyle: data.stripStyle,
+            colorPreset: data.colorPreset,
+            tierMode: data.tierMode,
+            brandColor: data.brandColor,
+          })
+        : undefined);
+
+    const businessUpdates: Record<string, unknown> = {};
+    if (data.nameEn !== undefined) businessUpdates["name_en"] = data.nameEn.trim();
+    if (data.nameAr !== undefined) businessUpdates["name_ar"] = data.nameAr.trim();
+    if (data.programType !== undefined) businessUpdates["program_type"] = data.programType;
+    if (data.brandColor !== undefined) businessUpdates["brand_color"] = data.brandColor;
+    if (data.accentColor !== undefined) businessUpdates["accent_color"] = data.accentColor;
+    if (resolvedTemplateId !== undefined) businessUpdates["template_id"] = resolvedTemplateId;
+    if (data.targetStamps !== undefined) businessUpdates["target_stamps"] = data.targetStamps;
+    if (data.offerEn !== undefined) businessUpdates["offer_en"] = data.offerEn;
+    if (data.offerAr !== undefined) businessUpdates["offer_ar"] = data.offerAr;
+    if (data.sarPerPoint !== undefined) businessUpdates["sar_per_point"] = data.sarPerPoint;
+    if (data.pointsPerReward !== undefined) {
+      businessUpdates["points_per_reward"] = data.pointsPerReward;
+    }
+
+    if (Object.keys(businessUpdates).length > 0) {
+      let updateQuery = db.from("businesses").update(businessUpdates).eq("id", targetBusinessId);
+      if (!allowCrossOwnerUpdate) {
+        updateQuery = updateQuery.eq("owner_id", user.id);
+      }
+      const { error: updateError } = await updateQuery;
+      if (updateError) {
+        throw new Error(updateError.message);
+      }
+    }
+
+    if (data.requestedPlan) {
+      const lowerPlan = data.requestedPlan.trim().toLowerCase();
+      const canonicalPlan =
+        lowerPlan === "multi_location" || lowerPlan === "growth" || lowerPlan === "enterprise"
+          ? "multi_location"
+          : "single_location";
+
+      await db.from("business_subscriptions").upsert(
+        {
+          business_id: targetBusinessId,
+          plan_code: "single_location",
+          requested_plan_code: canonicalPlan,
+          updated_at: nowIso,
+        },
+        { onConflict: "business_id" },
+      );
+    }
+
+    if (
+      data.mainBranchNameAr ||
+      data.mainBranchNameEn ||
+      data.mainBranchAddressAr ||
+      data.mainBranchAddressEn
+    ) {
+      const branchUpdates: Record<string, unknown> = { updated_at: nowIso };
+      if (data.mainBranchNameAr?.trim()) branchUpdates["name_ar"] = data.mainBranchNameAr.trim();
+      if (data.mainBranchNameEn?.trim()) branchUpdates["name_en"] = data.mainBranchNameEn.trim();
+      if (data.mainBranchAddressAr?.trim()) {
+        branchUpdates["address_ar"] = data.mainBranchAddressAr.trim();
+      }
+      if (data.mainBranchAddressEn?.trim()) {
+        branchUpdates["address_en"] = data.mainBranchAddressEn.trim();
+      }
+      await db
+        .from("branches")
+        .update(branchUpdates)
+        .eq("business_id", targetBusinessId)
+        .eq("code", "main");
+    }
+
+    const isCompleted = Boolean(data.completed) || data.step === "completed";
+    const targetStep = isCompleted ? "completed" : data.step;
+
+    const { error: onboardingError } = await db.from("business_onboarding").upsert(
+      {
+        business_id: targetBusinessId,
+        step: targetStep,
+        completed: isCompleted,
+        ...(isCompleted ? { completed_at: nowIso } : {}),
+        updated_at: nowIso,
+      },
+      { onConflict: "business_id" },
+    );
+
+    if (onboardingError) {
+      throw new Error(onboardingError.message);
+    }
+
+    return {
+      ok: true as const,
+      businessId: targetBusinessId,
+      step: targetStep,
+      completed: isCompleted,
+      templateId: resolvedTemplateId ?? null,
     };
   });

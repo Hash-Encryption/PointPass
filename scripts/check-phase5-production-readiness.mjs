@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execSync } from "node:child_process";
+import { getDefaultRewardForStampIcon, isCanonicalDefaultReward } from "../src/lib/wallet-tier.ts";
 
 const ROOT = process.cwd();
 const allowDirty = process.argv.includes("--allow-dirty");
@@ -25,9 +26,12 @@ function readFile(relPath) {
 
 console.log("--- PointPass V3: Phase 5 Production Readiness Verification ---");
 
-// 1. Verify Onboarding Continuity (No .name bug + full V3 serializePassTemplateMeta)
+// 1. Verify Onboarding Continuity (No .name bug + full V3 serializePassTemplateMeta + Tenant Isolation + Icon Rewards)
 const onboardingRoute = readFile("src/routes/onboarding.tsx");
+const dashboardRoute = readFile("src/routes/dashboard.tsx");
 const loyaltySetupStep = readFile("src/components/onboarding/LoyaltySetupStep.tsx");
+const walletFunctions = readFile("src/lib/wallet.functions.ts");
+const walletTier = readFile("src/lib/wallet-tier.ts");
 
 assert(
   onboardingRoute.includes("name_en") && onboardingRoute.includes("name_ar"),
@@ -46,11 +50,69 @@ assert(
   !/\.select\([^)]*\bname\b(?![_a-zA-Z])/.test(onboardingRoute),
   "src/routes/onboarding.tsx never selects a nonexistent name column on public.businesses",
 );
+assert(
+  onboardingRoute.includes('.eq("owner_id", user!.id)') ||
+    onboardingRoute.includes('.eq("owner_id", user.id)'),
+  "src/routes/onboarding.tsx explicitly filters businesses query by owner_id",
+);
+assert(
+  onboardingRoute.includes("saveOnboardingProgressServerFn"),
+  "src/routes/onboarding.tsx uses saveOnboardingProgressServerFn",
+);
+assert(
+  dashboardRoute.includes('.eq("owner_id", user!.id)') &&
+    dashboardRoute.includes('.eq("business_id", business!.id)'),
+  "src/routes/dashboard.tsx explicitly scopes merchant queries by owner_id and business_id",
+);
+assert(
+  walletFunctions.includes("export const saveOnboardingProgressServerFn") &&
+    walletFunctions.includes("createAdminSupabaseClient()") &&
+    walletFunctions.includes("auth.getUser(data.accessToken)") &&
+    walletFunctions.includes("existing.owner_id === user.id") &&
+    walletFunctions.includes('businessUpdates["target_stamps"]') &&
+    walletFunctions.includes('businessUpdates["offer_en"]') &&
+    walletFunctions.includes('businessUpdates["offer_ar"]') &&
+    walletFunctions.includes('from("business_onboarding").upsert'),
+  "src/lib/wallet.functions.ts implements ownership-verified saveOnboardingProgressServerFn with schema-valid columns",
+);
+assert(
+  walletFunctions.includes('.eq("owner_id", user.id)'),
+  "src/lib/wallet.functions.ts enforces owner_id scoping on merchant mutations/campaigns",
+);
 
 assert(
   loyaltySetupStep.includes("FREE_TIER_PRESETS") &&
-    loyaltySetupStep.includes("nearestFreeColorPreset"),
-  "src/components/onboarding/LoyaltySetupStep.tsx integrates FREE_TIER_PRESETS and nearestFreeColorPreset",
+    loyaltySetupStep.includes("nearestFreeColorPreset") &&
+    loyaltySetupStep.includes("saveOnboardingProgressServerFn") &&
+    loyaltySetupStep.includes("getDefaultRewardForStampIcon") &&
+    loyaltySetupStep.includes("isCanonicalDefaultReward"),
+  "src/components/onboarding/LoyaltySetupStep.tsx integrates FREE_TIER_PRESETS, saveOnboardingProgressServerFn, and canonical icon reward auto-sync",
+);
+assert(
+  walletTier.includes("STAMP_ICON_DEFAULT_REWARDS") &&
+    walletTier.includes("Free Specialty Coffee ☕") &&
+    walletTier.includes("Free Classic Burger 🍔") &&
+    walletTier.includes("Free Fresh Pastry 🥐") &&
+    walletTier.includes("Free Haircut & Styling ✂️") &&
+    walletTier.includes("Free Full Car Wash 🚗") &&
+    walletTier.includes("Free VIP Reward ⭐"),
+  "src/lib/wallet-tier.ts defines canonical STAMP_ICON_DEFAULT_REWARDS map",
+);
+assert(
+  getDefaultRewardForStampIcon("🍔").ar === "برجر كلاسيك مجاني 🍔" &&
+    getDefaultRewardForStampIcon("🍔").en === "Free Classic Burger 🍔" &&
+    getDefaultRewardForStampIcon("☕").ar === "قهوة مختصة مجانية ☕" &&
+    getDefaultRewardForStampIcon("croissant").en === "Free Fresh Pastry 🥐" &&
+    getDefaultRewardForStampIcon("scissors").en === "Free Haircut & Styling ✂️" &&
+    getDefaultRewardForStampIcon("carwash").ar === "غسيل سيارة مجاني شامل 🚗" &&
+    getDefaultRewardForStampIcon("⭐").en === "Free VIP Reward ⭐",
+  "getDefaultRewardForStampIcon resolves exact canonical EN/AR rewards for every icon key and emoji",
+);
+assert(
+  isCanonicalDefaultReward("Free Full Car Wash 🚗", "غسيل سيارة مجاني شامل 🚗") === true &&
+    isCanonicalDefaultReward("", "") === true &&
+    isCanonicalDefaultReward("Free Custom Matcha", "ماتشا خاصة مجانية") === false,
+  "isCanonicalDefaultReward auto-syncs default/empty rewards while preserving custom merchant text",
 );
 
 // 2. Verify Client Route & Component Isolation (Zero Node / Server PNG imports)

@@ -7,13 +7,17 @@ import { Input } from "@/components/ui/input";
 import { useLocale } from "@/lib/i18n";
 import { type ProgramType } from "@/constants/defaultTemplates";
 import { PassPreview } from "@/components/PassPreview";
-import { saveOnboardingStepFn } from "@/lib/onboarding.functions";
+import { saveOnboardingProgressServerFn } from "@/lib/wallet.functions";
 import { supabase } from "@/lib/supabase";
 import {
   FREE_TIER_PRESETS,
+  getDefaultRewardForStampIcon,
   getStoredWalletTier,
+  isCanonicalDefaultReward,
   nearestFreeColorPreset,
+  parsePassTemplateMeta,
   serializePassTemplateMeta,
+  STAMP_ICON_DEFAULT_REWARDS,
   WALLET_COLOR_PRESETS,
   STRIP_STYLES,
   type FreeColorPresetKey,
@@ -64,8 +68,8 @@ export const CURATED_TEMPLATES: CuratedTemplate[] = [
     accent: "#10B981",
     colorPreset: "green",
     targetStamps: 8,
-    rewardAr: "مكافأة خاصة بعد 8 زيارات 🎁",
-    rewardEn: "Special reward after 8 visits 🎁",
+    rewardAr: STAMP_ICON_DEFAULT_REWARDS.star!.ar,
+    rewardEn: STAMP_ICON_DEFAULT_REWARDS.star!.en,
   },
   {
     id: "coffee",
@@ -77,8 +81,8 @@ export const CURATED_TEMPLATES: CuratedTemplate[] = [
     accent: "#D97706",
     colorPreset: "orange",
     targetStamps: 7,
-    rewardAr: "قهوة مجانية من اختيارك ☕",
-    rewardEn: "Free handcrafted coffee ☕",
+    rewardAr: STAMP_ICON_DEFAULT_REWARDS.coffee!.ar,
+    rewardEn: STAMP_ICON_DEFAULT_REWARDS.coffee!.en,
   },
   {
     id: "burger",
@@ -90,8 +94,8 @@ export const CURATED_TEMPLATES: CuratedTemplate[] = [
     accent: "#EF4444",
     colorPreset: "red",
     targetStamps: 5,
-    rewardAr: "وجبة برجر مجانية من اختيارك 🍔",
-    rewardEn: "Free burger meal of your choice 🍔",
+    rewardAr: STAMP_ICON_DEFAULT_REWARDS.burger!.ar,
+    rewardEn: STAMP_ICON_DEFAULT_REWARDS.burger!.en,
   },
   {
     id: "bakery",
@@ -103,8 +107,8 @@ export const CURATED_TEMPLATES: CuratedTemplate[] = [
     accent: "#F59E0B",
     colorPreset: "orange",
     targetStamps: 6,
-    rewardAr: "قطعة حلى أو مخبوزات مجانية 🥐",
-    rewardEn: "Free pastry or dessert box 🥐",
+    rewardAr: STAMP_ICON_DEFAULT_REWARDS.bakery!.ar,
+    rewardEn: STAMP_ICON_DEFAULT_REWARDS.bakery!.en,
   },
   {
     id: "salon",
@@ -116,8 +120,8 @@ export const CURATED_TEMPLATES: CuratedTemplate[] = [
     accent: "#8B5CF6",
     colorPreset: "purple",
     targetStamps: 5,
-    rewardAr: "جلسة عناية أو حلاقة مجانية ✂️",
-    rewardEn: "Free grooming or beauty session ✂️",
+    rewardAr: STAMP_ICON_DEFAULT_REWARDS.salon!.ar,
+    rewardEn: STAMP_ICON_DEFAULT_REWARDS.salon!.en,
   },
   {
     id: "carwash",
@@ -129,8 +133,8 @@ export const CURATED_TEMPLATES: CuratedTemplate[] = [
     accent: "#06B6D4",
     colorPreset: "blue",
     targetStamps: 5,
-    rewardAr: "غسيل سيارة مجاني شامل 🚗",
-    rewardEn: "Free complete car wash 🚗",
+    rewardAr: STAMP_ICON_DEFAULT_REWARDS.carwash!.ar,
+    rewardEn: STAMP_ICON_DEFAULT_REWARDS.carwash!.en,
   },
 ];
 
@@ -146,6 +150,9 @@ interface LoyaltySetupStepProps {
   initialAccentColor?: string;
   initialTargetStamps?: number;
   initialStampIcon?: string;
+  initialOfferAr?: string;
+  initialOfferEn?: string;
+  initialTemplateId?: string | null;
   onSuccess?: (config: {
     program: ProgramType;
     brandColor: string;
@@ -154,6 +161,7 @@ interface LoyaltySetupStepProps {
     stampIcon: string;
     suggestedRewardAr: string;
     suggestedRewardEn: string;
+    templateId: string;
   }) => void;
   onBack?: () => void;
   values?: LoyaltySetupValues;
@@ -172,6 +180,9 @@ export function LoyaltySetupStep({
   initialAccentColor = "#10B981",
   initialTargetStamps = 8,
   initialStampIcon = "⭐",
+  initialOfferAr = "",
+  initialOfferEn = "",
+  initialTemplateId = null,
   onSuccess,
   onBack,
   values,
@@ -182,29 +193,35 @@ export function LoyaltySetupStep({
 }: LoyaltySetupStepProps) {
   const { locale } = useLocale();
   const ar = locale === "ar";
+  const parsedInitialMeta = initialTemplateId
+    ? parsePassTemplateMeta(initialTemplateId, initialBrandColor)
+    : null;
+  const initialDefaultReward = getDefaultRewardForStampIcon(values?.stampIcon ?? initialStampIcon);
 
   const [tierMode, setTierMode] = useState<WalletTierMode>(
-    () => values?.tierMode ?? getStoredWalletTier(),
+    () => values?.tierMode ?? parsedInitialMeta?.tierMode ?? getStoredWalletTier(),
   );
   const [activeTemplateId, setActiveTemplateId] = useState<string>(
-    () => values?.baseTemplateId ?? "blank",
+    () => values?.baseTemplateId ?? parsedInitialMeta?.baseId ?? "blank",
   );
   const [program] = useState<ProgramType>(initialProgram);
   const [brandColor, setBrandColor] = useState(() => values?.brandColor ?? initialBrandColor);
   const [accentColor, setAccentColor] = useState(initialAccentColor);
   const [colorPreset, setColorPreset] = useState<WalletColorPreset>(
-    () => values?.colorPreset ?? "green",
+    () => values?.colorPreset ?? parsedInitialMeta?.colorPreset ?? "green",
   );
-  const [stripStyle, setStripStyle] = useState<StripStyle>(() => values?.stripStyle ?? "pizzatown");
+  const [stripStyle, setStripStyle] = useState<StripStyle>(
+    () => values?.stripStyle ?? parsedInitialMeta?.stripStyle ?? "pizzatown",
+  );
   const [targetStamps, setTargetStamps] = useState(
     () => values?.stampsRequired ?? initialTargetStamps,
   );
   const [stampIcon, setStampIcon] = useState(() => values?.stampIcon ?? initialStampIcon);
   const [suggestedRewardAr, setSuggestedRewardAr] = useState(
-    () => values?.rewardNameAr ?? "مكافأة خاصة بعد 8 زيارات 🎁",
+    () => values?.rewardNameAr || initialOfferAr || initialDefaultReward.ar,
   );
   const [suggestedRewardEn, setSuggestedRewardEn] = useState(
-    () => values?.rewardNameEn ?? "Special reward after 8 visits 🎁",
+    () => values?.rewardNameEn || initialOfferEn || initialDefaultReward.en,
   );
   const [saving, setSaving] = useState(false);
 
@@ -259,6 +276,22 @@ export function LoyaltySetupStep({
         colorPreset: fallbackPreset,
       });
     }
+  }
+
+  function handleStampIconSelect(nextIcon: string) {
+    setStampIcon(nextIcon);
+    if (isCanonicalDefaultReward(suggestedRewardEn, suggestedRewardAr)) {
+      const nextReward = getDefaultRewardForStampIcon(nextIcon);
+      setSuggestedRewardAr(nextReward.ar);
+      setSuggestedRewardEn(nextReward.en);
+      onChange?.({
+        stampIcon: nextIcon,
+        rewardNameAr: nextReward.ar,
+        rewardNameEn: nextReward.en,
+      });
+      return;
+    }
+    onChange?.({ stampIcon: nextIcon });
   }
 
   function applyTemplate(tpl: CuratedTemplate) {
@@ -324,33 +357,25 @@ export function LoyaltySetupStep({
       });
 
       if (businessId) {
-        await saveOnboardingStepFn({
+        await saveOnboardingProgressServerFn({
           data: {
             accessToken: session.access_token,
             businessId,
-            step: "loyalty",
+            step: "reward",
             programType: program,
             brandColor: effectiveBrandColor,
             accentColor: effectiveAccentColor,
             targetStamps,
             templateId: metaString,
+            baseTemplateId: activeTemplateId,
+            stampIcon,
+            stripStyle,
+            colorPreset: resolvedColorPreset,
+            tierMode,
             offerAr: suggestedRewardAr,
             offerEn: suggestedRewardEn,
           },
         });
-
-        try {
-          await supabase
-            .from("businesses")
-            .update({
-              template_id: metaString,
-              offer_ar: suggestedRewardAr,
-              offer_en: suggestedRewardEn,
-            })
-            .eq("id", businessId);
-        } catch (err) {
-          console.warn("Template meta persistence note:", err);
-        }
       }
 
       toast.success(ar ? "تم حفظ تصميم البطاقة بنجاح!" : "Pass design saved!");
@@ -362,6 +387,7 @@ export function LoyaltySetupStep({
         stampIcon,
         suggestedRewardAr,
         suggestedRewardEn,
+        templateId: metaString,
       });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err));
@@ -559,10 +585,7 @@ export function LoyaltySetupStep({
                   <button
                     type="button"
                     key={ic}
-                    onClick={() => {
-                      setStampIcon(ic);
-                      onChange?.({ stampIcon: ic });
-                    }}
+                    onClick={() => handleStampIconSelect(ic)}
                     className={`size-9 rounded-xl text-base transition-all flex items-center justify-center shrink-0 ${
                       stampIcon === ic
                         ? "bg-zinc-800 border-2 border-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.25)] scale-105"

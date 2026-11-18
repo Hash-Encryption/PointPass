@@ -217,15 +217,39 @@ function MerchantDashboard() {
     enabled:
       Boolean(user) && adminRoleQuery.isSuccess && adminRoleQuery.data?.role !== "super_admin",
     queryFn: async () => {
-      const { data, error } = await supabase
+      const columns =
+        "id,slug,name_ar,name_en,logo_url,brand_color,accent_color,program_type,offer_ar,offer_en,target_stamps,sar_per_point,points_per_reward,latitude,longitude,geo_text_ar,geo_text_en,template_id";
+
+      const { data: owned, error } = await supabase
         .from("businesses")
-        .select(
-          "id,slug,name_ar,name_en,logo_url,brand_color,accent_color,program_type,offer_ar,offer_en,target_stamps,sar_per_point,points_per_reward,latitude,longitude,geo_text_ar,geo_text_en,template_id",
-        )
+        .select(columns)
+        .eq("owner_id", user!.id)
         .eq("status", "active")
         .order("created_at", { ascending: true });
       if (error) throw error;
-      return data as Business[];
+      if (owned && owned.length > 0) return owned as Business[];
+
+      // Fallback for active staff/managers explicitly assigned to a business
+      const { data: memberships, error: staffErr } = await supabase
+        .from("staff_members")
+        .select("business_id")
+        .eq("auth_user_id", user!.id)
+        .eq("status", "active");
+      if (staffErr) throw staffErr;
+
+      const assignedBusinessIds = Array.from(
+        new Set((memberships ?? []).map((row) => row.business_id).filter(Boolean)),
+      );
+      if (assignedBusinessIds.length === 0) return [];
+
+      const { data: staffBusinesses, error: staffBizErr } = await supabase
+        .from("businesses")
+        .select(columns)
+        .in("id", assignedBusinessIds)
+        .eq("status", "active")
+        .order("created_at", { ascending: true });
+      if (staffBizErr) throw staffBizErr;
+      return (staffBusinesses ?? []) as Business[];
     },
   });
 

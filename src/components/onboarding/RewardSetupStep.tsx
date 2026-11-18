@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useLocale } from "@/lib/i18n";
 import { type ProgramType } from "@/constants/defaultTemplates";
-import { saveOnboardingStepFn } from "@/lib/onboarding.functions";
+import { saveOnboardingProgressServerFn } from "@/lib/wallet.functions";
 import { supabase } from "@/lib/supabase";
 
 interface RewardSetupStepProps {
@@ -102,11 +102,11 @@ export function RewardSetupStep({
         );
       }
 
-      await saveOnboardingStepFn({
+      await saveOnboardingProgressServerFn({
         data: {
           accessToken: session.access_token,
           businessId,
-          step: "reward",
+          step: "launch",
           offerAr: finalOfferAr,
           offerEn: finalOfferEn,
           targetStamps:

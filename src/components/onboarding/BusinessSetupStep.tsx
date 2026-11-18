@@ -5,10 +5,18 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useLocale } from "@/lib/i18n";
-import { bootstrapOwnerBusinessFn, saveOnboardingStepFn } from "@/lib/onboarding.functions";
+import { bootstrapOwnerBusinessFn } from "@/lib/onboarding.functions";
+import { saveOnboardingProgressServerFn } from "@/lib/wallet.functions";
 import { supabase } from "@/lib/supabase";
 
 interface BusinessSetupStepProps {
+  initialBusiness?: {
+    id: string;
+    slug: string;
+    name_ar: string;
+    name_en: string;
+    plan: string;
+  } | null;
   onSuccess: (business: {
     business_id: string;
     slug: string;
@@ -19,15 +27,21 @@ interface BusinessSetupStepProps {
   }) => void;
 }
 
-export function BusinessSetupStep({ onSuccess }: BusinessSetupStepProps) {
-  const { locale, t } = useLocale();
+export function BusinessSetupStep({ initialBusiness, onSuccess }: BusinessSetupStepProps) {
+  const { locale } = useLocale();
   const ar = locale === "ar";
 
-  const [nameAr, setNameAr] = useState("");
-  const [nameEn, setNameEn] = useState("");
-  const [slug, setSlug] = useState("");
-  const [isCustomSlug, setIsCustomSlug] = useState(false);
-  const [showSecondary, setShowSecondary] = useState(false);
+  const [nameAr, setNameAr] = useState(initialBusiness?.name_ar ?? "");
+  const [nameEn, setNameEn] = useState(initialBusiness?.name_en ?? "");
+  const [slug, setSlug] = useState(initialBusiness?.slug ?? "");
+  const [isCustomSlug, setIsCustomSlug] = useState(Boolean(initialBusiness?.slug));
+  const [showSecondary, setShowSecondary] = useState(
+    Boolean(
+      initialBusiness?.name_ar &&
+      initialBusiness?.name_en &&
+      initialBusiness.name_ar !== initialBusiness.name_en,
+    ),
+  );
   const [submitting, setSubmitting] = useState(false);
 
   function slugify(text: string): string {
@@ -90,6 +104,30 @@ export function BusinessSetupStep({ onSuccess }: BusinessSetupStepProps) {
         );
       }
 
+      if (initialBusiness?.id) {
+        await saveOnboardingProgressServerFn({
+          data: {
+            accessToken: session.access_token,
+            businessId: initialBusiness.id,
+            step: "loyalty",
+            nameAr: finalNameAr,
+            nameEn: finalNameEn,
+            requestedPlan: "single_location",
+          },
+        });
+
+        toast.success(ar ? "تم تحديث بيانات المتجر بنجاح!" : "Store details updated!");
+        onSuccess({
+          business_id: initialBusiness.id,
+          slug: initialBusiness.slug,
+          name_ar: finalNameAr,
+          name_en: finalNameEn,
+          effective_plan: initialBusiness.plan || "single_location",
+          onboarding_step: "loyalty",
+        });
+        return;
+      }
+
       // Step 1: Create business
       const res = await bootstrapOwnerBusinessFn({
         data: {
@@ -102,13 +140,15 @@ export function BusinessSetupStep({ onSuccess }: BusinessSetupStepProps) {
       });
 
       if (res.ok && res.business) {
-        // Step 1.B: Background Plan Selection (skip manual plan step in UI)
+        // Step 1.B: Background Plan Selection & advance to loyalty (skip manual plan screen)
         try {
-          await saveOnboardingStepFn({
+          await saveOnboardingProgressServerFn({
             data: {
               accessToken: session.access_token,
               businessId: res.business.business_id,
-              step: "plan",
+              step: "loyalty",
+              nameAr: finalNameAr,
+              nameEn: finalNameEn,
               requestedPlan: "single_location",
             },
           });

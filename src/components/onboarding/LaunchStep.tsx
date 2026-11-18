@@ -15,7 +15,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { useLocale } from "@/lib/i18n";
 import { LocalQrCode, downloadQrCanvas } from "@/components/LocalQrCode";
-import { completeOnboardingFn } from "@/lib/onboarding.functions";
+import { saveOnboardingProgressServerFn } from "@/lib/wallet.functions";
 import { supabase } from "@/lib/supabase";
 
 interface LaunchStepProps {
@@ -71,10 +71,12 @@ export function LaunchStep({ business, onFinish, onBack }: LaunchStepProps) {
         );
       }
 
-      await completeOnboardingFn({
+      await saveOnboardingProgressServerFn({
         data: {
           accessToken: session.access_token,
           businessId: business.id,
+          step: "completed",
+          completed: true,
         },
       });
 
