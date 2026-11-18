@@ -214,16 +214,24 @@ function OnboardingRoute() {
           }
         }
 
-        // Look up onboarding record
-        const { data: onb } = await supabase
-          .from("business_onboarding")
-          .select("step,completed")
-          .eq("business_id", biz.id)
-          .maybeSingle();
+        // Look up onboarding record (non-blocking if permission denied or missing)
+        let onb: { step: string; completed: boolean } | null = null;
+        try {
+          const { data: onbData, error: onbErr } = await supabase
+            .from("business_onboarding")
+            .select("step,completed")
+            .eq("business_id", biz.id)
+            .maybeSingle();
+          if (!onbErr && onbData) {
+            onb = onbData as { step: string; completed: boolean };
+          }
+        } catch {
+          onb = null;
+        }
 
         return {
           business: biz,
-          onboarding: onb as { step: string; completed: boolean } | null,
+          onboarding: onb,
         };
       } catch (err) {
         console.warn("businessQuery exception:", err);

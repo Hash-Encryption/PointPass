@@ -1,6 +1,10 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { createAdminSupabaseClient, createServerSupabaseClient } from "@/lib/server-supabase";
+import {
+  createAdminSupabaseClient,
+  createUserSupabaseClient,
+  hasServiceRoleKey,
+} from "@/lib/server-supabase";
 export { saveOnboardingProgressServerFn } from "@/lib/wallet.functions";
 
 const bootstrapSchema = z.object({
@@ -20,7 +24,7 @@ const bootstrapSchema = z.object({
 export const bootstrapOwnerBusinessFn = createServerFn({ method: "POST" })
   .validator((input: unknown) => bootstrapSchema.parse(input))
   .handler(async ({ data }) => {
-    const serverClient = createServerSupabaseClient(data.accessToken);
+    const serverClient = createUserSupabaseClient(data.accessToken);
     const {
       data: { user },
       error: authError,
@@ -84,17 +88,18 @@ const saveStepSchema = z.object({
 export const saveOnboardingStepFn = createServerFn({ method: "POST" })
   .validator((input: unknown) => saveStepSchema.parse(input))
   .handler(async ({ data }) => {
-    const serverClient = createServerSupabaseClient(data.accessToken);
+    const userSupabase = createUserSupabaseClient(data.accessToken);
     const {
       data: { user },
       error: authError,
-    } = await serverClient.auth.getUser(data.accessToken);
+    } = await userSupabase.auth.getUser(data.accessToken);
 
     if (authError || !user) {
       throw new Error("Authentication required");
     }
 
-    const db = createAdminSupabaseClient() ?? serverClient;
+    const adminSupabase = hasServiceRoleKey() ? createAdminSupabaseClient() : null;
+    const db = adminSupabase ?? userSupabase;
     const { data: biz, error: bizErr } = await db
       .from("businesses")
       .select("id,owner_id,merchant_email")
@@ -137,16 +142,30 @@ export const saveOnboardingStepFn = createServerFn({ method: "POST" })
       if (updateErr) throw new Error(updateErr.message);
     }
 
-    const { error: onbErr } = await db.from("business_onboarding").upsert(
-      {
-        business_id: data.businessId,
-        step: data.step,
-        completed: false,
-        updated_at: nowIso,
-      },
-      { onConflict: "business_id" },
-    );
-    if (onbErr) throw new Error(onbErr.message);
+    try {
+      if (adminSupabase) {
+        const { error: onbErr } = await adminSupabase.from("business_onboarding").upsert(
+          {
+            business_id: data.businessId,
+            step: data.step,
+            completed: false,
+            updated_at: nowIso,
+          },
+          { onConflict: "business_id" },
+        );
+        if (onbErr)
+          console.warn("Non-blocking business_onboarding upsert warning:", onbErr.message);
+      } else {
+        const { error: rpcErr } = await userSupabase.rpc("save_onboarding_step", {
+          _business_id: data.businessId,
+          _step: data.step,
+          _requested_plan: data.requestedPlan ?? null,
+        });
+        if (rpcErr) console.warn("Non-blocking save_onboarding_step RPC warning:", rpcErr.message);
+      }
+    } catch (onbErr) {
+      console.warn("Non-blocking business_onboarding sync error:", onbErr);
+    }
 
     return {
       ok: true as const,
@@ -162,17 +181,18 @@ const completeSchema = z.object({
 export const completeOnboardingFn = createServerFn({ method: "POST" })
   .validator((input: unknown) => completeSchema.parse(input))
   .handler(async ({ data }) => {
-    const serverClient = createServerSupabaseClient(data.accessToken);
+    const userSupabase = createUserSupabaseClient(data.accessToken);
     const {
       data: { user },
       error: authError,
-    } = await serverClient.auth.getUser(data.accessToken);
+    } = await userSupabase.auth.getUser(data.accessToken);
 
     if (authError || !user) {
       throw new Error("Authentication required");
     }
 
-    const db = createAdminSupabaseClient() ?? serverClient;
+    const adminSupabase = hasServiceRoleKey() ? createAdminSupabaseClient() : null;
+    const db = adminSupabase ?? userSupabase;
     const { data: biz, error: bizErr } = await db
       .from("businesses")
       .select("id,owner_id,merchant_email")
@@ -196,17 +216,29 @@ export const completeOnboardingFn = createServerFn({ method: "POST" })
     }
 
     const nowIso = new Date().toISOString();
-    const { error: onbErr } = await db.from("business_onboarding").upsert(
-      {
-        business_id: data.businessId,
-        step: "completed",
-        completed: true,
-        completed_at: nowIso,
-        updated_at: nowIso,
-      },
-      { onConflict: "business_id" },
-    );
-    if (onbErr) throw new Error(onbErr.message);
+    try {
+      if (adminSupabase) {
+        const { error: onbErr } = await adminSupabase.from("business_onboarding").upsert(
+          {
+            business_id: data.businessId,
+            step: "completed",
+            completed: true,
+            completed_at: nowIso,
+            updated_at: nowIso,
+          },
+          { onConflict: "business_id" },
+        );
+        if (onbErr)
+          console.warn("Non-blocking business_onboarding upsert warning:", onbErr.message);
+      } else {
+        const { error: rpcErr } = await userSupabase.rpc("complete_onboarding", {
+          _business_id: data.businessId,
+        });
+        if (rpcErr) console.warn("Non-blocking complete_onboarding RPC warning:", rpcErr.message);
+      }
+    } catch (onbErr) {
+      console.warn("Non-blocking business_onboarding sync error:", onbErr);
+    }
 
     return {
       ok: true as const,

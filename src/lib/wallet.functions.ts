@@ -3,7 +3,12 @@ import { getRequestIP, getRequestHeader } from "@tanstack/react-start/server";
 import { z } from "zod";
 // @ts-expect-error Cloudflare supplies this runtime module to Pages Functions.
 import { env } from "cloudflare:workers";
-import { createServerSupabaseClient, createAdminSupabaseClient } from "@/lib/server-supabase";
+import {
+  createServerSupabaseClient,
+  createAdminSupabaseClient,
+  createUserSupabaseClient,
+  hasServiceRoleKey,
+} from "@/lib/server-supabase";
 import {
   buildBaselineWalletPassPayload,
   buildWalletPassPayload,
@@ -1577,25 +1582,25 @@ const saveOnboardingProgressSchema = z.object({
 export const saveOnboardingProgressServerFn = createServerFn({ method: "POST" })
   .validator((d: unknown) => saveOnboardingProgressSchema.parse(d))
   .handler(async ({ data }) => {
-    const userClient = createServerSupabaseClient(data.accessToken);
+    const userSupabase = createUserSupabaseClient(data.accessToken);
     const {
       data: { user },
       error: authError,
-    } = await userClient.auth.getUser(data.accessToken);
+    } = await userSupabase.auth.getUser(data.accessToken);
 
     if (authError || !user) {
       throw new Error("Authentication required");
     }
 
-    const admin = createAdminSupabaseClient();
-    const db = admin ?? userClient;
+    const adminSupabase = hasServiceRoleKey() ? createAdminSupabaseClient() : null;
+    const dbClient = adminSupabase ?? userSupabase;
     const nowIso = new Date().toISOString();
 
     let targetBusinessId = data.businessId;
     let allowCrossOwnerUpdate = false;
 
     if (targetBusinessId) {
-      const { data: existing, error: lookupError } = await db
+      const { data: existing, error: lookupError } = await dbClient
         .from("businesses")
         .select("id,owner_id,merchant_email")
         .eq("id", targetBusinessId)
@@ -1614,7 +1619,7 @@ export const saveOnboardingProgressServerFn = createServerFn({ method: "POST" })
 
       let hasRoleAccess = false;
       if (!ownerMatches && !emailMatches) {
-        const { data: roles } = await db
+        const { data: roles } = await dbClient
           .from("user_roles")
           .select("role,business_id")
           .eq("user_id", user.id)
@@ -1637,8 +1642,11 @@ export const saveOnboardingProgressServerFn = createServerFn({ method: "POST" })
         throw new Error("Forbidden: you do not have permission to update this business");
       }
 
-      if (emailMatches && !existing.owner_id) {
-        await db.from("businesses").update({ owner_id: user.id }).eq("id", targetBusinessId);
+      if (emailMatches && !existing.owner_id && adminSupabase) {
+        await adminSupabase
+          .from("businesses")
+          .update({ owner_id: user.id })
+          .eq("id", targetBusinessId);
       }
     } else {
       if (!data.slug || (!data.nameEn && !data.nameAr)) {
@@ -1649,42 +1657,64 @@ export const saveOnboardingProgressServerFn = createServerFn({ method: "POST" })
       const cleanNameEn = (data.nameEn ?? data.nameAr ?? "").trim();
       const cleanNameAr = (data.nameAr ?? data.nameEn ?? "").trim();
 
-      const { data: created, error: insertError } = await db
-        .from("businesses")
-        .insert({
-          owner_id: user.id,
-          slug: cleanSlug,
-          name_en: cleanNameEn,
-          name_ar: cleanNameAr,
-          plan: "single_location",
-          status: "active",
-        })
-        .select("id")
-        .single();
+      if (adminSupabase) {
+        const { data: created, error: insertError } = await adminSupabase
+          .from("businesses")
+          .insert({
+            owner_id: user.id,
+            slug: cleanSlug,
+            name_en: cleanNameEn,
+            name_ar: cleanNameAr,
+            plan: "single_location",
+            status: "active",
+          })
+          .select("id")
+          .single();
 
-      if (insertError || !created) {
-        throw new Error(insertError?.message ?? "Could not create business");
-      }
+        if (insertError || !created) {
+          throw new Error(insertError?.message ?? "Could not create business");
+        }
 
-      targetBusinessId = created.id as string;
+        targetBusinessId = created.id as string;
 
-      await db
-        .from("user_roles")
-        .upsert(
-          { user_id: user.id, role: "merchant", business_id: targetBusinessId },
-          { onConflict: "user_id,role,business_id", ignoreDuplicates: true },
+        await adminSupabase
+          .from("user_roles")
+          .upsert(
+            { user_id: user.id, role: "merchant", business_id: targetBusinessId },
+            { onConflict: "user_id,role,business_id", ignoreDuplicates: true },
+          );
+
+        await adminSupabase.from("business_subscriptions").upsert(
+          {
+            business_id: targetBusinessId,
+            plan_code: "single_location",
+            requested_plan_code: "single_location",
+            status: "pending",
+            updated_at: nowIso,
+          },
+          { onConflict: "business_id" },
         );
-
-      await db.from("business_subscriptions").upsert(
-        {
-          business_id: targetBusinessId,
-          plan_code: "single_location",
-          requested_plan_code: "single_location",
-          status: "pending",
-          updated_at: nowIso,
-        },
-        { onConflict: "business_id" },
-      );
+      } else {
+        const { data: rpcData, error: rpcError } = await userSupabase.rpc(
+          "bootstrap_owner_business",
+          {
+            _slug: cleanSlug,
+            _name_ar: cleanNameAr,
+            _name_en: cleanNameEn,
+            _plan: "single_location",
+          },
+        );
+        if (rpcError) {
+          throw new Error(rpcError.message);
+        }
+        const row = (Array.isArray(rpcData) ? rpcData[0] : rpcData) as {
+          business_id?: string;
+        } | null;
+        if (!row?.business_id) {
+          throw new Error("Could not create business");
+        }
+        targetBusinessId = row.business_id;
+      }
     }
 
     const resolvedTemplateId =
@@ -1716,7 +1746,10 @@ export const saveOnboardingProgressServerFn = createServerFn({ method: "POST" })
     }
 
     if (Object.keys(businessUpdates).length > 0) {
-      let updateQuery = db.from("businesses").update(businessUpdates).eq("id", targetBusinessId);
+      let updateQuery = dbClient
+        .from("businesses")
+        .update(businessUpdates)
+        .eq("id", targetBusinessId);
       if (!allowCrossOwnerUpdate) {
         updateQuery = updateQuery.eq("owner_id", user.id);
       }
@@ -1726,22 +1759,32 @@ export const saveOnboardingProgressServerFn = createServerFn({ method: "POST" })
       }
     }
 
+    let canonicalRequestedPlan: string | undefined;
     if (data.requestedPlan) {
       const lowerPlan = data.requestedPlan.trim().toLowerCase();
-      const canonicalPlan =
+      canonicalRequestedPlan =
         lowerPlan === "multi_location" || lowerPlan === "growth" || lowerPlan === "enterprise"
           ? "multi_location"
           : "single_location";
 
-      await db.from("business_subscriptions").upsert(
-        {
-          business_id: targetBusinessId,
-          plan_code: "single_location",
-          requested_plan_code: canonicalPlan,
-          updated_at: nowIso,
-        },
-        { onConflict: "business_id" },
-      );
+      if (adminSupabase) {
+        try {
+          const { error: subErr } = await adminSupabase.from("business_subscriptions").upsert(
+            {
+              business_id: targetBusinessId,
+              plan_code: "single_location",
+              requested_plan_code: canonicalRequestedPlan,
+              updated_at: nowIso,
+            },
+            { onConflict: "business_id" },
+          );
+          if (subErr) {
+            console.warn("Non-blocking business_subscriptions sync warning:", subErr.message);
+          }
+        } catch (subErr) {
+          console.warn("Non-blocking business_subscriptions sync error:", subErr);
+        }
+      }
     }
 
     if (
@@ -1750,38 +1793,92 @@ export const saveOnboardingProgressServerFn = createServerFn({ method: "POST" })
       data.mainBranchAddressAr ||
       data.mainBranchAddressEn
     ) {
-      const branchUpdates: Record<string, unknown> = { updated_at: nowIso };
-      if (data.mainBranchNameAr?.trim()) branchUpdates["name_ar"] = data.mainBranchNameAr.trim();
-      if (data.mainBranchNameEn?.trim()) branchUpdates["name_en"] = data.mainBranchNameEn.trim();
-      if (data.mainBranchAddressAr?.trim()) {
-        branchUpdates["address_ar"] = data.mainBranchAddressAr.trim();
+      try {
+        const branchUpdates: Record<string, unknown> = { updated_at: nowIso };
+        if (data.mainBranchNameAr?.trim()) branchUpdates["name_ar"] = data.mainBranchNameAr.trim();
+        if (data.mainBranchNameEn?.trim()) branchUpdates["name_en"] = data.mainBranchNameEn.trim();
+        if (data.mainBranchAddressAr?.trim()) {
+          branchUpdates["address_ar"] = data.mainBranchAddressAr.trim();
+        }
+        if (data.mainBranchAddressEn?.trim()) {
+          branchUpdates["address_en"] = data.mainBranchAddressEn.trim();
+        }
+        const { error: branchErr } = await dbClient
+          .from("branches")
+          .update(branchUpdates)
+          .eq("business_id", targetBusinessId)
+          .eq("code", "main");
+        if (branchErr) {
+          console.warn("Non-blocking main branch update warning:", branchErr.message);
+        }
+      } catch (branchErr) {
+        console.warn("Non-blocking main branch update error:", branchErr);
       }
-      if (data.mainBranchAddressEn?.trim()) {
-        branchUpdates["address_en"] = data.mainBranchAddressEn.trim();
-      }
-      await db
-        .from("branches")
-        .update(branchUpdates)
-        .eq("business_id", targetBusinessId)
-        .eq("code", "main");
     }
 
     const isCompleted = Boolean(data.completed) || data.step === "completed";
     const targetStep = isCompleted ? "completed" : data.step;
 
-    const { error: onboardingError } = await db.from("business_onboarding").upsert(
-      {
-        business_id: targetBusinessId,
-        step: targetStep,
-        completed: isCompleted,
-        ...(isCompleted ? { completed_at: nowIso } : {}),
-        updated_at: nowIso,
-      },
-      { onConflict: "business_id" },
-    );
-
-    if (onboardingError) {
-      throw new Error(onboardingError.message);
+    // Non-blocking progress sync on public.business_onboarding:
+    // Use admin upsert only when a real service_role key exists; otherwise call SECURITY DEFINER RPCs
+    // via userSupabase and never throw so onboarding step transitions are never blocked.
+    try {
+      if (adminSupabase) {
+        const { error: onboardingError } = await adminSupabase.from("business_onboarding").upsert(
+          {
+            business_id: targetBusinessId,
+            step: targetStep,
+            completed: isCompleted,
+            ...(isCompleted ? { completed_at: nowIso } : {}),
+            updated_at: nowIso,
+          },
+          { onConflict: "business_id" },
+        );
+        if (onboardingError) {
+          console.warn("Non-blocking business_onboarding upsert warning:", onboardingError.message);
+        }
+      } else if (isCompleted) {
+        const { error: rpcError } = await userSupabase.rpc("complete_onboarding", {
+          _business_id: targetBusinessId,
+        });
+        if (rpcError) {
+          console.warn("Non-blocking complete_onboarding RPC warning:", rpcError.message);
+          const { error: updateErr } = await userSupabase
+            .from("business_onboarding")
+            .update({
+              step: "completed",
+              completed: true,
+              completed_at: nowIso,
+              updated_at: nowIso,
+            })
+            .eq("business_id", targetBusinessId);
+          if (updateErr) {
+            console.warn("Non-blocking business_onboarding update warning:", updateErr.message);
+          }
+        }
+      } else {
+        const { error: rpcError } = await userSupabase.rpc("save_onboarding_step", {
+          _business_id: targetBusinessId,
+          _step: targetStep,
+          _requested_plan: canonicalRequestedPlan ?? null,
+        });
+        if (rpcError) {
+          console.warn("Non-blocking save_onboarding_step RPC warning:", rpcError.message);
+          const { error: updateErr } = await userSupabase
+            .from("business_onboarding")
+            .update({
+              step: targetStep,
+              completed: false,
+              updated_at: nowIso,
+            })
+            .eq("business_id", targetBusinessId);
+          if (updateErr) {
+            console.warn("Non-blocking business_onboarding update warning:", updateErr.message);
+          }
+        }
+      }
+    } catch (onboardingSyncErr) {
+      console.warn("Non-blocking business_onboarding sync error:", onboardingSyncErr);
     }
 
     return {

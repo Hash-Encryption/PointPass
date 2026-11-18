@@ -354,13 +354,17 @@ function MerchantDashboard() {
     queryKey: ["dashboard-onboarding-check", business?.id],
     enabled: Boolean(business?.id),
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("business_onboarding")
-        .select("step,completed")
-        .eq("business_id", business!.id)
-        .maybeSingle();
-      if (error) return null;
-      return data as { step: string; completed: boolean } | null;
+      try {
+        const { data, error } = await supabase
+          .from("business_onboarding")
+          .select("step,completed")
+          .eq("business_id", business!.id)
+          .maybeSingle();
+        if (error) return null;
+        return data as { step: string; completed: boolean } | null;
+      } catch {
+        return null;
+      }
     },
   });
 
@@ -668,11 +672,16 @@ function MerchantDashboard() {
   }
 
   // Phase 4: An Owner with an incomplete onboarding business resumes onboarding
+  const hasConfiguredPass = Boolean(
+    business?.template_id && (business?.offer_en?.trim() || business?.offer_ar?.trim()),
+  );
+
   if (
     isOwnerUser &&
     onboardingQuery.isSuccess &&
     onboardingQuery.data &&
-    !onboardingQuery.data.completed
+    !onboardingQuery.data.completed &&
+    !hasConfiguredPass
   ) {
     return <Navigate to="/onboarding" replace />;
   }

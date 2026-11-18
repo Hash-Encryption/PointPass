@@ -31,6 +31,7 @@ const onboardingRoute = readFile("src/routes/onboarding.tsx");
 const dashboardRoute = readFile("src/routes/dashboard.tsx");
 const loyaltySetupStep = readFile("src/components/onboarding/LoyaltySetupStep.tsx");
 const walletFunctions = readFile("src/lib/wallet.functions.ts");
+const serverSupabase = readFile("src/lib/server-supabase.ts");
 const walletTier = readFile("src/lib/wallet-tier.ts");
 
 assert(
@@ -65,15 +66,28 @@ assert(
   "src/routes/dashboard.tsx explicitly scopes merchant queries by owner_id and business_id",
 );
 assert(
+  serverSupabase.includes("export function createUserSupabaseClient") &&
+    serverSupabase.includes("export function hasServiceRoleKey"),
+  "src/lib/server-supabase.ts exports createUserSupabaseClient and hasServiceRoleKey",
+);
+assert(
   walletFunctions.includes("export const saveOnboardingProgressServerFn") &&
+    walletFunctions.includes("createUserSupabaseClient(data.accessToken)") &&
+    walletFunctions.includes("hasServiceRoleKey()") &&
     walletFunctions.includes("createAdminSupabaseClient()") &&
     walletFunctions.includes("auth.getUser(data.accessToken)") &&
     walletFunctions.includes("existing.owner_id === user.id") &&
     walletFunctions.includes('businessUpdates["target_stamps"]') &&
     walletFunctions.includes('businessUpdates["offer_en"]') &&
     walletFunctions.includes('businessUpdates["offer_ar"]') &&
-    walletFunctions.includes('from("business_onboarding").upsert'),
-  "src/lib/wallet.functions.ts implements ownership-verified saveOnboardingProgressServerFn with schema-valid columns",
+    walletFunctions.includes('rpc("save_onboarding_step"') &&
+    walletFunctions.includes('rpc("complete_onboarding"') &&
+    walletFunctions.includes("Non-blocking business_onboarding"),
+  "src/lib/wallet.functions.ts implements JWT-authenticated saveOnboardingProgressServerFn with non-blocking business_onboarding sync",
+);
+assert(
+  dashboardRoute.includes("hasConfiguredPass") && dashboardRoute.includes("!hasConfiguredPass"),
+  "src/routes/dashboard.tsx never redirects configured merchants back to /onboarding if business_onboarding is unavailable",
 );
 assert(
   walletFunctions.includes('.eq("owner_id", user.id)'),
